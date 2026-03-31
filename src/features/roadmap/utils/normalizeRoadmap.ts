@@ -3,6 +3,7 @@ import type { RoadmapResponseOutput, NormalizedTopic, NormalizedRoadmap, Difficu
 // ============================================
 // ROADMAP NORMALIZATION UTILITY
 // Transforms AI structured payload into client-schema with DB requirements
+// Refinement #2: standardized roleTitle field alongside backward-compat 'role'
 // ============================================
 
 const VALID_DIFFICULTIES: Difficulty[] = ["Beginner", "Intermediate", "Advanced"];
@@ -27,13 +28,17 @@ export function normalizeRoadmapPayload(
     };
   });
 
+  const now = new Date().toISOString();
+
   return {
     version: "v1", // Explicitly bind API contract version to all successful normalizer sweeps
-    role: rawPayload.role,
+    role: rawPayload.role, // Backward compat: human-readable title
+    roleTitle: rawPayload.role, // Refinement #2: standardized display name
     roleId,
     userId: user?.id, // Structure reserved for full DB hydration mapping
     isFallback,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
     topics: normalizedTopics,
   };
 }

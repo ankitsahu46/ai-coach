@@ -44,15 +44,50 @@ export type NormalizedTopic = z.infer<typeof normalizedTopicSchema>;
 /**
  * Normalized roadmap structure containing normalized topics, API versions,
  * graceful fallback markers, and timestamp boundaries.
+ *
+ * Refinement #2: Uses `roleId` (identifier) + `roleTitle` (display name).
+ * The field `role` is kept as an alias for roleTitle for backward compatibility.
  */
 export const normalizedRoadmapSchema = z.object({
   version: z.literal("v1").describe("Schema contract versioning"),
-  role: z.string(),
+  role: z.string().describe("Human-readable role name (alias for roleTitle)"),
   roleId: z.string(),
-  userId: z.string().optional().describe("For future authentication mapping"),
+  roleTitle: z.string().optional().describe("Standardized display name — mirrors 'role'"),
+  userId: z.string().optional().describe("For authentication mapping"),
   isFallback: z.boolean().optional().describe("Flagged true if generated via Graceful Degradation"),
   topics: z.array(normalizedTopicSchema),
   createdAt: z.string(),
+  updatedAt: z.string().optional().describe("Last modification timestamp"),
 });
 
 export type NormalizedRoadmap = z.infer<typeof normalizedRoadmapSchema>;
+
+// ============================================
+// API REQUEST VALIDATION SCHEMAS
+// ============================================
+
+/**
+ * POST /api/roadmap — request body validation
+ * TODO: Replace userId with session-based auth (NextAuth)
+ */
+export const postRoadmapRequestSchema = z.object({
+  roleTitle: z.string().min(1, "roleTitle is required"),
+  roleDescription: z.string().optional(),
+  roleId: z.string().min(1, "roleId is required"),
+  userId: z.string().optional().describe("Client-provided userId — replace with session auth in production"),
+});
+
+export type PostRoadmapRequest = z.infer<typeof postRoadmapRequestSchema>;
+
+/**
+ * PATCH /api/roadmap — request body validation
+ * TODO: Replace userId with session-based auth (NextAuth)
+ */
+export const patchRoadmapRequestSchema = z.object({
+  userId: z.string().min(1, "userId is required"),
+  roleId: z.string().min(1, "roleId is required"),
+  topicId: z.string().min(1, "topicId is required"),
+  completed: z.boolean(),
+});
+
+export type PatchRoadmapRequest = z.infer<typeof patchRoadmapRequestSchema>;

@@ -49,7 +49,8 @@ async function generateWithRetry(callAi: (attempt: number) => Promise<RoadmapRes
         throw error;
       }
       // Otherwise loop around and try again
-      logger.warn("AI generation failed, retrying...");
+      logger.warn("AI generation failed. Waiting 1000ms before retrying...");
+      await new Promise((res) => setTimeout(res, 1000));
     }
   }
   throw new Error("Unreachable");

@@ -11,6 +11,7 @@
   "dependencies": {
     "@google/genai": "^1.47.0",
     "clsx": "^2.1.1",
+    "mongoose": "^9.3.3",
     "motion": "^12.38.0",
     "next": "16.2.1",
     "next-themes": "^0.4.6",
