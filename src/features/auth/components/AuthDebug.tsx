@@ -40,7 +40,12 @@ export function AuthDebug() {
             </div>
 
             <button 
-              onClick={() => signOut()}
+              onClick={() => {
+                import("@/features/roadmap/utils/cache").then((m) => {
+                  m.clearAuthCache(session.user.id);
+                  signOut();
+                });
+              }}
               className="mt-2 w-full py-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors border border-red-500/20"
             >
               Sign Out

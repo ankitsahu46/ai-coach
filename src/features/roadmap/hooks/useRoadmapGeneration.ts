@@ -163,7 +163,9 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
       }, UX_DELAY_MS);
 
       try {
-        const response = await fetch("/api/roadmap", {
+        const endpoint = isAuthenticated ? "/api/roadmap" : "/api/roadmap/guest";
+        
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -177,7 +179,7 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
 
         if (!response.ok) {
           const errData = await response.json();
-          throw new Error(errData.error || "Failed to generate roadmap.");
+          throw new Error(errData.error || `Failed to generate roadmap via ${endpoint}`);
         }
 
         const raw = await response.json();
