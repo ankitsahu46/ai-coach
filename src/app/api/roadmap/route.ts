@@ -14,6 +14,7 @@ import {
   createRoadmap,
   updateTopicCompletion,
 } from "@/features/roadmap/services/db";
+import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth/server-utils";
 
 // ============================================
 // API ROUTE: /api/roadmap
@@ -21,27 +22,33 @@ import {
 // POST — Generate via AI + persist to DB (idempotent)
 // PATCH — Update topic completion (atomic)
 //
-// TODO: Replace userId with session-based auth (NextAuth)
-// Currently userId comes from client — NOT production-safe.
-// In production, extract userId from server-side session.
+// Security: Session-based auth via Auth.js
+// userId is extracted server-side, never trusted from client
 // ============================================
 
 // Module-level simulated idempotency lock spanning Node processes.
 const inFlightRequests = new Map<string, Promise<NormalizedRoadmap>>();
 
 // ============================================
-// GET /api/roadmap?roleId=X&userId=Y
+// GET /api/roadmap?roleId=X
 // ============================================
 export async function GET(req: NextRequest) {
+  let userId_context = "unauthenticated";
   try {
+    const authResult = await getAuthenticatedUser();
+    if (authResult.errorResponse) {
+      return unauthorizedResponse(authResult.errorResponse, authResult.status);
+    }
+    const userId = authResult.user.userId;
+    userId_context = userId;
+
     const { searchParams } = new URL(req.url);
     const roleId = searchParams.get("roleId");
-    // TODO: Replace with session-based auth — userId should NOT come from client
-    const userId = searchParams.get("userId");
 
-    if (!roleId || !userId) {
+    if (!roleId) {
+      logger.warn("GET /api/roadmap — Missing roleId", { userId });
       return NextResponse.json(
-        { error: "Missing required query params: 'roleId' and 'userId'." },
+        { error: "Missing required query param: 'roleId'." },
         { status: 400 }
       );
     }
@@ -57,7 +64,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ data: roadmap }, { status: 200 });
   } catch (error: any) {
-    logger.error("GET /api/roadmap failed:", error.message);
+    logger.error("GET /api/roadmap failed", { userId: userId_context, error: error.message });
     return NextResponse.json(
       { error: "Failed to fetch roadmap." },
       { status: 500 }
@@ -69,46 +76,61 @@ export async function GET(req: NextRequest) {
 // POST /api/roadmap
 // ============================================
 export async function POST(req: Request) {
+  let userId_context = "unauthenticated";
   let requestRoleTitle = "Developer";
   let requestRoleId = "fallback";
 
   try {
+    const authResult = await getAuthenticatedUser();
+    if (authResult.errorResponse) {
+      return unauthorizedResponse(authResult.errorResponse, authResult.status);
+    }
+    const userId = authResult.user.userId;
+    userId_context = userId;
+
     const body = await req.json();
 
-    // Validate with Zod schema
+    // Validate with Zod schema (userId is removed from schema)
     const parseResult = postRoadmapRequestSchema.safeParse(body);
     if (!parseResult.success) {
-      logger.warn("Invalid POST body:", parseResult.error.flatten());
+      logger.warn("Invalid POST body", { userId, error: parseResult.error.flatten() });
       return NextResponse.json(
-        { error: "Invalid request body. Ensure roleTitle and roleId are provided." },
+        { error: "Invalid request body." },
         { status: 400 }
       );
     }
 
-    const { roleTitle, roleDescription, roleId, userId } = parseResult.data;
+    // Assign safe variants AFTER validation
+    const { roleTitle, roleDescription, roleId, importedRoadmap } = parseResult.data;
     requestRoleTitle = roleTitle;
     requestRoleId = roleId;
 
     const desc = roleDescription || "Generate a comprehensive roadmap for this role.";
 
-    // If authenticated user → check DB first (true idempotency via unique index)
-    if (userId) {
-      const existing = await getRoadmap(userId, roleId);
-      if (existing) {
-        logger.info(`DB idempotent hit: Roadmap exists for user=${userId}, role=${roleId}`);
-        return NextResponse.json({ data: existing }, { status: 200 });
-      }
+    // DB check first (true idempotency via unique index)
+    const existing = await getRoadmap(userId, roleId);
+    if (existing) {
+      logger.info(`DB idempotent hit: Roadmap exists`, { userId, roleId });
+      return NextResponse.json({ data: existing }, { status: 200 });
+    }
+
+    // Migration interception — if the request contains a guest roadmap to import
+    if (importedRoadmap) {
+      logger.info("Migrating guest roadmap to DB", { userId, roleId });
+      // Ensure the imported data gets securely tied to the authenticated user ID
+      const savedDoc = await createRoadmap(userId, importedRoadmap);
+      return NextResponse.json({ data: savedDoc }, { status: 200 });
     }
 
     // Backend in-memory idempotency lock (for concurrent requests)
-    const lockKey = userId ? `${userId}:${roleId}` : roleId;
+    const lockKey = `${userId}:${roleId}`;
     if (inFlightRequests.has(lockKey)) {
-      logger.info(`Idempotency Lock: Awaiting in-flight for key: ${lockKey}`);
+      logger.info(`Idempotency Lock: Awaiting in-flight for key`, { lockKey });
       const existingData = await inFlightRequests.get(lockKey);
       return NextResponse.json({ data: existingData }, { status: 200 });
     }
 
-    logger.info(`Starting Roadmap Generation for: ${roleTitle}`);
+    logger.info(`Starting Roadmap Generation`, { roleTitle, userId });
 
     // Create the execution Promise boundary
     const generationPromise = (async () => {
@@ -123,14 +145,10 @@ export async function POST(req: Request) {
         throw new Error("The AI service returned malformed data structure.");
       }
 
-      // Persist to DB if authenticated
-      if (userId) {
-        const savedDoc = await createRoadmap(userId, valid.data);
-        logger.info(`Roadmap persisted to DB for user=${userId}, role=${roleId}`);
-        return savedDoc;
-      }
-
-      return valid.data;
+      // Persist to DB securely scoped by authenticated user
+      const savedDoc = await createRoadmap(userId, valid.data);
+      logger.info(`Roadmap persisted to DB`, { userId, roleId });
+      return savedDoc;
     })();
 
     // Expose memory lock
@@ -138,14 +156,18 @@ export async function POST(req: Request) {
 
     try {
       const validData = await generationPromise;
-      logger.info(`Roadmap Successfully Dispatched via API for: ${roleTitle}`);
+      logger.info(`Roadmap Successfully Dispatched via API`, { roleTitle, userId });
       return NextResponse.json({ data: validData }, { status: 200 });
     } finally {
       // Clear lock (Memory Leak Guard)
       inFlightRequests.delete(lockKey);
     }
   } catch (error: any) {
-    logger.error("Generation failed. Triggering Graceful Degradation.", error);
+    logger.error("Generation failed. Triggering Graceful Degradation.", { 
+      userId: userId_context,
+      roleId: requestRoleId,
+      error: error.message 
+    });
 
     // Graceful Degradation: provide static fallback payload
     const rawFallback = getFallbackRoadmap(requestRoleTitle);
@@ -167,26 +189,34 @@ export async function POST(req: Request) {
 // PATCH /api/roadmap
 // ============================================
 export async function PATCH(req: Request) {
+  let userId_context = "unauthenticated";
   try {
+    const authResult = await getAuthenticatedUser();
+    if (authResult.errorResponse) {
+      return unauthorizedResponse(authResult.errorResponse, authResult.status);
+    }
+    const userId = authResult.user.userId;
+    userId_context = userId;
+
     const body = await req.json();
 
-    // Validate with Zod schema
+    // Validate with Zod schema (userId removed from schema)
     const parseResult = patchRoadmapRequestSchema.safeParse(body);
     if (!parseResult.success) {
-      logger.warn("Invalid PATCH body:", parseResult.error.flatten());
+      logger.warn("Invalid PATCH body", { userId, error: parseResult.error.flatten() });
       return NextResponse.json(
-        { error: "Invalid request body. Required: userId, roleId, topicId, completed." },
+        { error: "Invalid request body." },
         { status: 400 }
       );
     }
 
-    // TODO: Replace userId with session-based auth — do NOT trust client-provided userId
-    const { userId, roleId, topicId, completed } = parseResult.data;
+    const { roleId, topicId, completed } = parseResult.data;
 
-    // Refinement #4: returns null if roadmap or topicId not found
+    // Secure database update — scoped tightly by userId
     const updated = await updateTopicCompletion(userId, roleId, topicId, completed);
 
     if (!updated) {
+       logger.warn("PATCH failed: Topic not found or unauthorized", { userId, roleId, topicId });
       return NextResponse.json(
         { error: `Topic '${topicId}' not found for this user and role.` },
         { status: 404 }
@@ -195,7 +225,7 @@ export async function PATCH(req: Request) {
 
     return NextResponse.json({ success: true, data: updated }, { status: 200 });
   } catch (error: any) {
-    logger.error("PATCH /api/roadmap failed:", error.message);
+    logger.error("PATCH /api/roadmap failed", { userId: userId_context, error: error.message });
     return NextResponse.json(
       { error: "Failed to update topic completion." },
       { status: 500 }

@@ -68,23 +68,22 @@ export type NormalizedRoadmap = z.infer<typeof normalizedRoadmapSchema>;
 
 /**
  * POST /api/roadmap — request body validation
- * TODO: Replace userId with session-based auth (NextAuth)
+ * Secured via NextAuth session (userId is extracted server-side)
  */
 export const postRoadmapRequestSchema = z.object({
   roleTitle: z.string().min(1, "roleTitle is required"),
   roleDescription: z.string().optional(),
   roleId: z.string().min(1, "roleId is required"),
-  userId: z.string().optional().describe("Client-provided userId — replace with session auth in production"),
+  importedRoadmap: normalizedRoadmapSchema.optional().describe("For migrating guest roadmaps directly to DB"),
 });
 
 export type PostRoadmapRequest = z.infer<typeof postRoadmapRequestSchema>;
 
 /**
  * PATCH /api/roadmap — request body validation
- * TODO: Replace userId with session-based auth (NextAuth)
+ * Secured via NextAuth session (userId is extracted server-side)
  */
 export const patchRoadmapRequestSchema = z.object({
-  userId: z.string().min(1, "userId is required"),
   roleId: z.string().min(1, "roleId is required"),
   topicId: z.string().min(1, "topicId is required"),
   completed: z.boolean(),

@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { AuthSessionProvider } from "@/providers/AuthSessionProvider";
 import { ThemeProvider } from "@/providers/ThemeProvider";
 import { RoleProvider } from "@/features/role-selection/context/RoleContext";
 
@@ -11,10 +12,10 @@ import { RoleProvider } from "@/features/role-selection/context/RoleContext";
 // The root layout imports only this — it never needs
 // to know about individual feature providers.
 //
-// To add a new provider (e.g. AuthProvider):
-//   1. Import it here
-//   2. Nest it in the tree below
-//   3. Root layout stays unchanged
+// Provider order (outermost → innermost):
+//   1. AuthSessionProvider — enables useSession() everywhere
+//   2. ThemeProvider       — dark/light mode
+//   3. RoleProvider        — selected career role state
 // ============================================
 
 interface AppProvidersProps {
@@ -23,8 +24,10 @@ interface AppProvidersProps {
 
 export function AppProviders({ children }: AppProvidersProps) {
   return (
-    <ThemeProvider>
-      <RoleProvider>{children}</RoleProvider>
-    </ThemeProvider>
+    <AuthSessionProvider>
+      <ThemeProvider>
+        <RoleProvider>{children}</RoleProvider>
+      </ThemeProvider>
+    </AuthSessionProvider>
   );
 }
