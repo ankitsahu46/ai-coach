@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
+import { mutate } from "swr";
 import type { Role } from "@/types";
 import type { NormalizedRoadmap } from "../types";
 import { logger } from "../utils/logger";
@@ -422,6 +423,9 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
         }
 
         logger.info("Topic completion synced to DB", { topicId, completed: newCompleted });
+        
+        // Globally revalidate SWR cache across the app (Dashboard reacts instantly)
+        mutate(`/api/roadmap?roleId=${(optimisticData as NormalizedRoadmap).roleId}`);
       } catch (err) {
         // ROLLBACK: revert UI + localStorage
         logger.error("Failed to sync completion to DB. Rolling back.");
