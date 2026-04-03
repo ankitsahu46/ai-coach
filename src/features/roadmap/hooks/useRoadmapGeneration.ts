@@ -25,6 +25,12 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
   const userId = session?.user?.id;
   const isAuthenticated = status === "authenticated";
 
+  // Refs to track current auth state — prevents stale closures in callbacks
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  const userIdRef = useRef(userId);
+  isAuthenticatedRef.current = isAuthenticated;
+  userIdRef.current = userId;
+
   // State
   const [data, setData] = useState<NormalizedRoadmap | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -164,7 +170,7 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
       }, UX_DELAY_MS);
 
       try {
-        const endpoint = isAuthenticated ? "/api/roadmap" : "/api/roadmap/guest";
+        const endpoint = isAuthenticatedRef.current ? "/api/roadmap" : "/api/roadmap/guest";
         
         const response = await fetch(endpoint, {
           method: "POST",
@@ -189,11 +195,11 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
         logger.info("Roadmap fully synced via Endpoint", { role: role.title });
 
         // Cache in localStorage scoped to the current user (if any)
-        cacheRoadmap(role.id, generatedRoadmap, userId);
+        cacheRoadmap(role.id, generatedRoadmap, userIdRef.current);
         setData(generatedRoadmap);
         
         // ANALYTICS TRACKING
-        if (!isAuthenticated) {
+        if (!isAuthenticatedRef.current) {
           logger.info("ANALYTICS: guest_generated", { roleId: role.id });
         }
       } catch (err: any) {
@@ -216,27 +222,34 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
     } finally {
       currentPromiseRef.current = null;
     }
-  }, [userId, cacheRoadmap]);
+  }, [cacheRoadmap]);
 
   // ============================================
-  // AUTO-LOAD: mount / role change / session change
+  // AUTO-LOAD: mount / role change / session resolved
   // ============================================
+  // We derive a boolean "sessionResolved" so the effect only runs once the
+  // session is known (not "loading"), preventing double-fires during auth transition.
+  const sessionResolved = status !== "loading";
+
   useEffect(() => {
-    // Don't do data fetching if the session status is still figuring itself out.
-    if (!selectedRole || status === "loading") return;
+    if (!selectedRole || !sessionResolved) return;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     const load = async () => {
-      if (isAuthenticated) {
-        // ── AUTHENTICATED FLOW (SWR & MIGRATION) ──
-        const cached = getCachedRoadmap(selectedRole.id, userId);
+      // Read current auth state from refs (always fresh, no stale closure)
+      const authNow = isAuthenticatedRef.current;
+      const uidNow = userIdRef.current;
+
+      if (authNow) {
+        // ── AUTHENTICATED FLOW ──
+        const cached = getCachedRoadmap(selectedRole.id, uidNow);
 
         if (cached) {
           logger.info("Auth Cache Hit (SWR)", { role: selectedRole.title });
           setData(cached);
-          setIsLoading(false); 
+          setIsLoading(false);
           setError(null);
         } else {
           setIsLoading(true);
@@ -248,63 +261,47 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
         const dbRoadmap = await fetchFromDB(selectedRole.id, controller.signal);
 
         // --- GUEST TO AUTH MIGRATION ENGINE ---
-        const guestData = getCachedRoadmap(selectedRole.id, undefined); // fetch un-scoped guest cache
-        const migrationKey = `migration_done_${userId}_${selectedRole.id}`;
-        
-        // Advanced TTL Lock checking (allows retry edge cases after 24 hrs)
+        const guestData = getCachedRoadmap(selectedRole.id, undefined);
+        const migrationKey = `migration_done_${uidNow}_${selectedRole.id}`;
+
         const isMigrationLocked = () => {
           const raw = localStorage.getItem(migrationKey);
           if (!raw) return false;
           try {
             const parsed = JSON.parse(raw);
             const ageHours = (Date.now() - parsed.at) / (1000 * 60 * 60);
-            return ageHours < 24; 
+            return ageHours < 24;
           } catch {
-            return raw === "true"; // Backwards compatibility for old locks
+            return raw === "true";
           }
         };
-        
+
         const hasMigrated = isMigrationLocked();
 
         if (guestData && !hasMigrated) {
-          // If Guest data exists, but there is NO DB Roadmap -> We Migrate
           if (!dbRoadmap) {
             logger.info("Migration Engine: Converting guest roadmap to DB.", { role: selectedRole.title });
             try {
               const migratedData = await migrateToDB(guestData, controller.signal);
-              
-              // Secure Migration Lock with TTL
               localStorage.setItem(migrationKey, JSON.stringify({ done: true, at: Date.now() }));
-              // Safely destroy guest cache only after DB success
               localStorage.removeItem(`roadmap:guest:${selectedRole.id}`);
-
-              cacheRoadmap(selectedRole.id, migratedData, userId);
+              cacheRoadmap(selectedRole.id, migratedData, uidNow);
               setData(migratedData);
               setIsLoading(false);
-              
-              // Soft UI Feedback
               if (typeof window !== "undefined") {
-                 // TODO: Upgrade to Sonner or react-hot-toast if added to package.json
-                 alert("Your roadmap has been successfully saved to your account.");
+                alert("Your roadmap has been successfully saved to your account.");
               }
-              
               logger.info("ANALYTICS: migration_success", { roleId: selectedRole.id });
-              
-              return; // End flow successfully 
+              return;
             } catch (err: any) {
               if (err.name === "AbortError") return;
               logger.error("Migration Engine failed. Guest cache preserved.", err.message);
-              logger.info("ANALYTICS: migration_failed", { roleId: selectedRole.id, reason: err.message });
-              
-              // PARTIAL FAILURE FIX: Give them their guest data to use, stop loading, abort AI generation
               setData(guestData);
               setIsLoading(false);
               return;
             }
-          } 
-          // MIGRATION COLLISION: Guest data exists, but DB ALSO has data. DB wins.
-          else {
-            logger.info("Guest roadmap discarded due to existing DB data", { userId, roleId: selectedRole.id });
+          } else {
+            logger.info("Guest roadmap discarded due to existing DB data", { userId: uidNow, roleId: selectedRole.id });
             localStorage.setItem(migrationKey, JSON.stringify({ done: true, at: Date.now() }));
             localStorage.removeItem(`roadmap:guest:${selectedRole.id}`);
           }
@@ -313,32 +310,18 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
         // --- STANDARD DB HIT ---
         if (dbRoadmap) {
           logger.info("DB Hit", { role: selectedRole.title });
-          
-          if (cached) {
-            // Advanced Equality Validation via Timestamp (Lightweight + Exact)
-            const isDifferent = cached.updatedAt !== dbRoadmap.updatedAt;
-            if (isDifferent) {
-              logger.info("SWR determined background DB sync differs from local cache.");
-              if (typeof window !== "undefined") {
-                alert("Your roadmap has been silently updated to reflect progress from another device.");
-              }
-            }
-          }
-
-          cacheRoadmap(selectedRole.id, dbRoadmap, userId); 
-          setData(dbRoadmap); 
-          setIsLoading(false); 
+          cacheRoadmap(selectedRole.id, dbRoadmap, uidNow);
+          setData(dbRoadmap);
+          setIsLoading(false);
           return;
         }
 
-        // 3. Not in DB AND no guest data to migrate → generate via AI + persist
+        // Not in DB AND no guest data → generate via AI + persist
         logger.info("DB Miss — generating via AI", { role: selectedRole.title });
-        setIsLoading(false); 
         await generateRoadmap(selectedRole);
       } else {
         // ── UNAUTHENTICATED FLOW ──
-        const cached = getCachedRoadmap(selectedRole.id); // Guest scope
-
+        const cached = getCachedRoadmap(selectedRole.id);
         if (cached) {
           logger.info("Guest Cache Hit", { role: selectedRole.title });
           setData(cached);
@@ -360,7 +343,7 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
     return () => {
       controller.abort();
     };
-  }, [selectedRole, status, userId, isAuthenticated, getCachedRoadmap, cacheRoadmap, fetchFromDB, generateRoadmap, migrateToDB]);
+  }, [selectedRole, sessionResolved, getCachedRoadmap, cacheRoadmap, fetchFromDB, generateRoadmap, migrateToDB]);
 
   // ============================================
   // TOGGLE COMPLETION — Optimistic + DB sync
@@ -386,12 +369,10 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
       optimisticData = {
         ...currentData,
         topics: updatedTopics,
-        // Vital for timestamp equality validation during SWR synchronization
-        updatedAt: new Date().toISOString(),
       };
 
       // Sync localStorage immediately (optimistic)
-      cacheRoadmap(currentData.roleId, optimisticData, userId);
+      cacheRoadmap(currentData.roleId, optimisticData, userIdRef.current);
 
       return optimisticData;
     });
@@ -400,8 +381,11 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
 
     logger.info("Topic completed status toggled", { topicId });
 
+    // Globally update SWR cache with optimistic data so Dashboard syncs instantly BEFORE server
+    mutate(`/api/roadmap?roleId=${(optimisticData as NormalizedRoadmap).roleId}`, optimisticData, { revalidate: false });
+
     // If authenticated → sync to DB via PATCH
-    if (isAuthenticated && optimisticData) {
+    if (isAuthenticatedRef.current && optimisticData) {
       const newCompleted = (optimisticData as NormalizedRoadmap).topics.find(
         t => t.id === topicId
       )?.completed;
@@ -422,21 +406,30 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
           throw new Error("PATCH failed");
         }
 
-        logger.info("Topic completion synced to DB", { topicId, completed: newCompleted });
-        
-        // Globally revalidate SWR cache across the app (Dashboard reacts instantly)
+        // Use server-confirmed response to update state authoritatively.
+        // This ensures localStorage matches DB exactly, preventing
+        // stale cache from poisoning future page loads.
+        const patchResult = await response.json();
+        if (patchResult.data) {
+          const confirmedRoadmap = patchResult.data as NormalizedRoadmap;
+          setData(confirmedRoadmap);
+          cacheRoadmap(confirmedRoadmap.roleId, confirmedRoadmap, userId);
+        }
+
+        // Trigger SWR background revalidation for Dashboard consistency
         mutate(`/api/roadmap?roleId=${(optimisticData as NormalizedRoadmap).roleId}`);
       } catch (err) {
-        // ROLLBACK: revert UI + localStorage
+        // ROLLBACK: revert UI + localStorage + SWR cache
         logger.error("Failed to sync completion to DB. Rolling back.");
 
         if (previousData) {
           setData(previousData);
           cacheRoadmap((previousData as NormalizedRoadmap).roleId, previousData as NormalizedRoadmap, userId);
+          mutate(`/api/roadmap?roleId=${(previousData as NormalizedRoadmap).roleId}`, previousData, { revalidate: true });
         }
       }
     }
-  }, [userId, isAuthenticated, cacheRoadmap]);
+  }, [cacheRoadmap]);
 
   // ============================================
   // DERIVED STATE

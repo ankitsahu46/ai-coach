@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { ThemeToggle } from "@/components/molecules/ThemeToggle";
+import { AuthMenu } from "./AuthMenu";
 
 // ============================================
 // APP SHELL — Shared page wrapper
@@ -22,8 +23,9 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   return (
     <div className="min-h-screen bg-background">
-      {/* Floating Theme Toggle */}
-      <div className="fixed top-4 right-4 z-50">
+      {/* Floating Theme Toggle & Auth Menu */}
+      <div className="fixed top-4 right-4 sm:top-6 sm:right-6 z-50 flex items-center gap-3">
+        <AuthMenu />
         <ThemeToggle />
       </div>
 

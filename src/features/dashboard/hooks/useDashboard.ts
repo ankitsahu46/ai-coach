@@ -100,7 +100,7 @@ export function useDashboard(): DashboardState {
   }, [roadmap]);
 
   // Handle Loading - Immediate unified evaluation without flicker
-  const isAuthLoading = status === "loading";
+  const isAuthLoading = status === "loading" || status === "unauthenticated";
   const isRoleLoading = !isHydrated;
   const isLoading = isAuthLoading || isRoleLoading || swrIsLoading || (isValidating && !roadmap && !fetchError);
 
@@ -127,7 +127,7 @@ export function useDashboard(): DashboardState {
 
   return {
     hasRole,
-    roadmap,
+    roadmap: roadmap ?? null,
     progress,
     stats,
     nextTopic,
