@@ -1,25 +1,22 @@
 import { useSession, signIn } from "next-auth/react";
 import { useEffect, useMemo } from "react";
-import useSWR from "swr";
 import { useRole } from "@/features/role-selection";
-import type { NormalizedRoadmap, NormalizedTopic } from "@/features/roadmap/types";
-import { logger } from "@/features/roadmap/utils/logger";
+import type { NormalizedTopic } from "@/features/roadmap/types";
+import { useRoadmapStore } from "@/features/roadmap/store/useRoadmapStore";
 
-const fetcher = async (url: string) => {
-  const res = await fetch(url);
-  if (res.status === 404) {
-    const error = new Error("Not Found");
-    (error as any).status = 404;
-    throw error;
-  }
-  if (!res.ok) throw new Error("Failed to fetch roadmap");
-  const data = await res.json();
-  return data.data;
-};
+// ============================================
+// useDashboard
+// ============================================
+// Reads roadmap data from the GLOBAL Zustand store.
+// The Roadmap page writes to the same store, so when
+// a topic is toggled, the Dashboard sees it INSTANTLY.
+//
+// No more disconnected SWR fetch — single source of truth.
+// ============================================
 
 export interface DashboardState {
   hasRole: boolean;
-  roadmap: NormalizedRoadmap | null;
+  roadmap: ReturnType<typeof useRoadmapStore.getState>["roadmapData"];
   progress: number;
   stats: {
     completed: number;
@@ -33,11 +30,10 @@ export interface DashboardState {
 }
 
 export function useDashboard(): DashboardState {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const { selectedRole, isHydrated } = useRole();
 
-  // Auth Protection Boundary - Block execution while loading
-  // SWR won't fetch because shouldFetch evaluates safely
+  // Auth protection — redirect unauthenticated users to sign-in
   useEffect(() => {
     if (status === "unauthenticated") {
       signIn(undefined, { callbackUrl: "/dashboard" });
@@ -46,26 +42,12 @@ export function useDashboard(): DashboardState {
 
   const hasRole = !!selectedRole;
 
-  // Data fetching via SWR
-  // Prevent double fetch by strongly gating execution
-  const shouldFetch = status === "authenticated" && selectedRole?.id;
-  const swrKey = shouldFetch ? `/api/roadmap?roleId=${selectedRole.id}` : null;
-  const {
-    data: roadmap,
-    error: fetchError,
-    isLoading: swrIsLoading,
-    isValidating
-  } = useSWR<NormalizedRoadmap>(
-    swrKey,
-    fetcher,
-    {
-      revalidateOnFocus: true,
-      errorRetryCount: 2,
-      onSuccess: () => logger.info("Dashboard SWR: Data successfully synchronized")
-    }
-  );
+  // ── Read from the SAME Zustand store that the Roadmap page writes to ──
+  const roadmap = useRoadmapStore((s) => s.roadmapData);
+  const storeIsLoading = useRoadmapStore((s) => s.isLoading);
+  const storeError = useRoadmapStore((s) => s.error);
 
-  // Derived State Memoization
+  // ── Derived stats (memoized) ──
   const { progress, stats, nextTopic } = useMemo(() => {
     if (!roadmap || !roadmap.topics || roadmap.topics.length === 0) {
       return {
@@ -76,33 +58,28 @@ export function useDashboard(): DashboardState {
     }
 
     const total = roadmap.topics.length;
-    // O(1) lookup via Set optimization (scalable pattern)
-    const completedTopicIds = new Set<string>();
-    
+    let completed = 0;
+    let firstIncomplete: NormalizedTopic | null = null;
+
     for (const topic of roadmap.topics) {
       if (topic.completed) {
-        completedTopicIds.add(topic.id);
+        completed++;
+      } else if (!firstIncomplete) {
+        firstIncomplete = topic;
       }
     }
 
-    const completed = completedTopicIds.size;
-    const next = roadmap.topics.find((t) => !completedTopicIds.has(t.id)) || null;
-
     return {
       progress: Math.round((completed / total) * 100),
-      stats: {
-        completed,
-        remaining: total - completed,
-        total,
-      },
-      nextTopic: next,
+      stats: { completed, remaining: total - completed, total },
+      nextTopic: firstIncomplete,
     };
   }, [roadmap]);
 
-  // Handle Loading - Immediate unified evaluation without flicker
+  // ── Loading state ──
   const isAuthLoading = status === "loading" || status === "unauthenticated";
   const isRoleLoading = !isHydrated;
-  const isLoading = isAuthLoading || isRoleLoading || swrIsLoading || (isValidating && !roadmap && !fetchError);
+  const isLoading = isAuthLoading || isRoleLoading || storeIsLoading;
 
   if (isAuthLoading) {
     return {
@@ -117,13 +94,8 @@ export function useDashboard(): DashboardState {
     };
   }
 
-  const error = fetchError ? fetchError.message : null;
-  
-  // Empty state explicitly handles the case where the user has a role, fetch finishes, but receives zero docs (usually 404 sets error, but just in case)
-  // But wait, the API returns 404 for no roadmap, which SWR interprets as an error. 
-  // Let's ensure a 404 is specifically treated as 'isEmpty'
-  const isSWR404 = fetchError && (fetchError as any).status === 404;
-  const isEmpty = !isLoading && hasRole && (!roadmap && !!isSWR404);
+  // Empty = user has a role but no roadmap data exists yet
+  const isEmpty = !isLoading && hasRole && !roadmap;
 
   return {
     hasRole,
@@ -133,6 +105,6 @@ export function useDashboard(): DashboardState {
     nextTopic,
     isLoading,
     isEmpty,
-    error: isSWR404 ? null : error, // suppress error if it's just 'not found'
+    error: storeError,
   };
 }
