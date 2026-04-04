@@ -7,6 +7,10 @@ import { RoadmapCard } from "./RoadmapCard";
 import { StatsGrid } from "./StatsGrid";
 import { ContinueLearningCard } from "./ContinueLearningCard";
 import { useRole } from "@/features/role-selection";
+import { useConsistency } from "@/features/consistency/hooks/useConsistency";
+import { StreakCard } from "@/features/consistency/components/StreakCard";
+import { ConsistencyScoreCard } from "@/features/consistency/components/ConsistencyScoreCard";
+import { WeeklyActivityChart } from "@/features/consistency/components/WeeklyActivityChart";
 
 // ============================================
 // DASHBOARD CONTAINER
@@ -28,6 +32,7 @@ export function DashboardContainer() {
   } = useDashboard();
   
   const { selectedRole } = useRole();
+  const { consistency } = useConsistency(selectedRole?.id || null);
 
   if (isLoading) {
     return (
@@ -70,6 +75,20 @@ export function DashboardContainer() {
     <div className="w-full max-w-5xl mx-auto flex flex-col gap-6">
       <RoadmapCard roadmap={roadmap} progress={progress} />
       
+      {/* CONSTISTENCY WIDGETS (High Visibility) */}
+      {consistency && (
+         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <StreakCard 
+               currentStreak={consistency.currentStreak} 
+               longestStreak={consistency.longestStreak} 
+               freezeCredits={consistency.freezeCredits} 
+               lastActiveDate={consistency.lastActiveDate}
+            />
+            <ConsistencyScoreCard score={consistency.consistencyScore} />
+            <WeeklyActivityChart data={consistency.weeklyActivity} />
+         </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <StatsGrid stats={stats} />

@@ -263,13 +263,87 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
       ? 0
       : Math.round((completedCount / roadmapData.topics.length) * 100);
 
-  // ── Bound toggle: bakes in current auth state via refs ──
+  // ── Bound toggle: Orchestrates state + API side-effects ──
+  const isLoggingRef = useRef(false);
+  const consistencyDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
   const boundToggle = useCallback(
-    (topicId: string) => {
+    async (topicId: string) => {
+      // Optimistic update
+      const current = useRoadmapStore.getState().roadmapData;
+      if (!current) return;
+      const topicIndex = current.topics.findIndex((t) => t.id === topicId);
+      if (topicIndex === -1) return;
+      const isCompletedNow = !current.topics[topicIndex].completed;
+
+      // Update Zustand globally
       toggleTopicCompletion(topicId, isAuthRef.current, userIdRef.current);
+
+      if (!isAuthRef.current) return; // Guests stop here
+
+      // Debounce API dispatch for Roadmap PATCH (protects against rapid spamming the SAME topic)
+      if (isLoggingRef.current) return;
+      isLoggingRef.current = true;
+
+      try {
+        const patchRes = await fetch("/api/roadmap", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roleId: current.roleId,
+            topicId,
+            completed: isCompletedNow,
+          }),
+        });
+
+        if (!patchRes.ok) throw new Error("PATCH failed");
+        
+        const json = await patchRes.json();
+        if (json.data) {
+          // Confirm with server-source
+          const confirmed = json.data as NormalizedRoadmap;
+          setRoadmapData(confirmed);
+          setCachedRoadmap(confirmed.roleId, confirmed, userIdRef.current);
+
+          // Only log to consistency engine if it was a MARK AS COMPLETED action.
+          // Coalesce / batching write implementation
+          if (isCompletedNow) {
+            if (consistencyDebounceRef.current) {
+              clearTimeout(consistencyDebounceRef.current);
+            }
+            
+            // Queue up the single merged hit for 2 seconds
+            consistencyDebounceRef.current = setTimeout(() => {
+              fetch("/api/consistency/log", {
+                 method: "POST",
+                 headers: { "Content-Type": "application/json" },
+                 body: JSON.stringify({
+                   roleId: current.roleId,
+                   action: "TOPIC_COMPLETED"
+                 })
+              }).catch(err => logger.error("Debounced Consistency log failed", err));
+            }, 2000);
+          }
+        }
+      } catch (err: any) {
+        logger.error("API update failed — rolling back to previous state", err);
+        setRoadmapData(current);
+        setCachedRoadmap(current.roleId, current, userIdRef.current);
+      } finally {
+        isLoggingRef.current = false;
+      }
     },
-    [toggleTopicCompletion]
+    [toggleTopicCompletion, setRoadmapData]
   );
+
+  // Cleanup debounce on unmount to prevent memory leaks and ghost calls
+  useEffect(() => {
+    return () => {
+      if (consistencyDebounceRef.current) {
+        clearTimeout(consistencyDebounceRef.current);
+      }
+    };
+  }, []);
 
   return {
     roadmapData,

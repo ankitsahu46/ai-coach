@@ -98,7 +98,6 @@ export const useRoadmapStore = create<RoadmapState>((set, get) => ({
     const topicIndex = current.topics.findIndex((t) => t.id === topicId);
     if (topicIndex === -1) return;
 
-    // Build the optimistic next state
     const updatedTopics = [...current.topics];
     updatedTopics[topicIndex] = {
       ...updatedTopics[topicIndex],
@@ -110,44 +109,12 @@ export const useRoadmapStore = create<RoadmapState>((set, get) => ({
       topics: updatedTopics,
     };
 
-    // 1. Update global store — every subscriber (Roadmap + Dashboard) reacts instantly
+    // 1. Update global store
     set({ roadmapData: optimistic });
 
     // 2. Sync to localStorage
     setCachedRoadmap(current.roleId, optimistic, userId);
 
     logger.info("Topic completion toggled in store", { topicId, completed: updatedTopics[topicIndex].completed });
-
-    // 3. If authenticated → fire PATCH to MongoDB in background
-    if (isAuthenticated) {
-      const newCompleted = updatedTopics[topicIndex].completed;
-
-      fetch("/api/roadmap", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          roleId: current.roleId,
-          topicId,
-          completed: newCompleted,
-        }),
-      })
-        .then(async (res) => {
-          if (!res.ok) throw new Error("PATCH failed");
-          const json = await res.json();
-          if (json.data) {
-            // Update store + cache with server-confirmed data
-            const confirmed = json.data as NormalizedRoadmap;
-            set({ roadmapData: confirmed });
-            setCachedRoadmap(confirmed.roleId, confirmed, userId);
-            logger.info("Topic synced to DB (server-confirmed)", { topicId, completed: newCompleted });
-          }
-        })
-        .catch(() => {
-          // ROLLBACK on failure
-          logger.error("PATCH failed — rolling back to previous state");
-          set({ roadmapData: current });
-          setCachedRoadmap(current.roleId, current, userId);
-        });
-    }
   },
 }));

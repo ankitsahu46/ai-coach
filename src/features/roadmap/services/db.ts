@@ -109,7 +109,7 @@ export async function createRoadmap(
         })),
       },
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
   );
 
   logger.info(`Roadmap upsert executed in DB for user=${userId}, role=${data.roleId}`);
@@ -141,7 +141,7 @@ export async function updateTopicCompletion(
       $set: { "topics.$.completed": completed },
       // updatedAt is auto-managed by Mongoose timestamps
     },
-    { new: true } // Return the updated document
+    { returnDocument: "after" } // Return the updated document
   );
 
   // Refinement #4: topicId not found → return null for 404 handling

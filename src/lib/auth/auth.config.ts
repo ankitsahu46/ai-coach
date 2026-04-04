@@ -99,13 +99,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
      * ❌ Never store: full user object, roles, roadmap data
      * ✅ Only store: userId, email, name
      */
-    async jwt({ token, user }) {
-      // user is only available on initial sign-in, not on subsequent requests
+    async jwt({ token, user, profile }) {
+      // user and profile are only available on initial sign-in
       if (user) {
         token.userId = user.id;
         token.email = user.email;
         token.name = user.name;
-        token.picture = user.image;
+        // NextAuth Google provider usually maps profile.picture -> user.image.
+        // We capture both just in case, ensuring it's never dropped.
+        token.picture = profile?.picture || user.image || token.picture;
       }
       return token;
     },
