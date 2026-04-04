@@ -22,7 +22,7 @@ export interface IRoadmapTopic {
 /** Root roadmap document interface */
 export interface IRoadmap extends Document {
   _id: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;
+  userId: string;
   roleId: string;
   roleTitle: string; // Refinement #2: standardized naming (was "role")
   version: string;
@@ -51,8 +51,7 @@ const RoadmapTopicSchema = new Schema<IRoadmapTopic>(
 const RoadmapSchema = new Schema<IRoadmap>(
   {
     userId: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
+      type: String,
       required: true,
       index: true,
     },

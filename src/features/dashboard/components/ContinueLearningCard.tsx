@@ -17,7 +17,7 @@ export function ContinueLearningCard({ roleId, nextTopic }: ContinueLearningCard
         <h3 className="text-xl font-bold text-white mb-2">Roadmap Complete!</h3>
         <p className="text-white/60 mb-6">You have mastered all the topics in this roadmap. Great job!</p>
         <Link
-          href={`/roadmap/${roleId}`}
+          href="/roadmap"
           className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-white/10 hover:bg-white/20 text-white font-medium transition-colors"
         >
           Review Roadmap
@@ -46,7 +46,7 @@ export function ContinueLearningCard({ roleId, nextTopic }: ContinueLearningCard
         </p>
 
         <Link
-          href={`/roadmap/${roleId}?resume=true`}
+          href="/roadmap"
           className="inline-flex items-center justify-center gap-2 w-full px-6 py-3.5 rounded-xl bg-white text-black font-semibold hover:bg-white/90 transition-transform active:scale-[0.98]"
         >
           <span>Continue Learning</span>

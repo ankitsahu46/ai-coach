@@ -55,7 +55,7 @@ export function WeeklyActivityChart({ data }: Props) {
                   {/* Tooltip on hover */}
                  {!isEmpty && (
                     <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded pointer-events-none whitespace-nowrap z-10 transition-opacity">
-                      {day.count} {day.count === 1 ? "completed" : "completed"}
+                      {day.count} {day.count === 1 ? "completion" : "completions"}
                     </div>
                  )}
               </div>

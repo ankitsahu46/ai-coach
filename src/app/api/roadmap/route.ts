@@ -7,7 +7,7 @@ import {
   patchRoadmapRequestSchema,
   type NormalizedRoadmap,
 } from "@/features/roadmap/types";
-import { logger } from "@/features/roadmap/utils/logger";
+import { logger, createApiTracer, sanitizeError } from "@/lib/logger";
 import { getFallbackRoadmap } from "@/features/roadmap/services/fallback";
 import {
   getRoadmap,
@@ -33,20 +33,20 @@ const inFlightRequests = new Map<string, Promise<NormalizedRoadmap>>();
 // GET /api/roadmap?roleId=X
 // ============================================
 export async function GET(req: NextRequest) {
-  let userId_context = "unauthenticated";
+  const trace = createApiTracer("GET /api/roadmap");
   try {
     const authResult = await getAuthenticatedUser();
     if (authResult.errorResponse) {
       return unauthorizedResponse(authResult.errorResponse, authResult.status);
     }
     const userId = authResult.user.userId;
-    userId_context = userId;
+    trace.userId = userId;
 
     const { searchParams } = new URL(req.url);
     const roleId = searchParams.get("roleId");
 
     if (!roleId) {
-      logger.warn("GET /api/roadmap — Missing roleId", { userId });
+      trace.fail(400, "Missing roleId");
       return NextResponse.json(
         { error: "Missing required query param: 'roleId'." },
         { status: 400 }
@@ -56,15 +56,17 @@ export async function GET(req: NextRequest) {
     const roadmap = await getRoadmap(userId, roleId);
 
     if (!roadmap) {
+      trace.fail(404, "No roadmap found", { roleId });
       return NextResponse.json(
         { error: "No roadmap found for this user and role." },
         { status: 404 }
       );
     }
 
+    trace.success({ roleId });
     return NextResponse.json({ data: roadmap }, { status: 200 });
   } catch (error: any) {
-    logger.error("GET /api/roadmap failed", { userId: userId_context, error: error.message });
+    trace.fail(500, sanitizeError(error));
     return NextResponse.json(
       { error: "Failed to fetch roadmap." },
       { status: 500 }
@@ -93,7 +95,7 @@ export async function POST(req: Request) {
     // Validate with Zod schema (userId is removed from schema)
     const parseResult = postRoadmapRequestSchema.safeParse(body);
     if (!parseResult.success) {
-      logger.warn("Invalid POST body", { userId, error: parseResult.error.flatten() });
+      logger.warn("Invalid POST body", { userId, error: JSON.stringify(parseResult.error.flatten()) });
       return NextResponse.json(
         { error: "Invalid request body." },
         { status: 400 }
@@ -126,8 +128,20 @@ export async function POST(req: Request) {
     const lockKey = `${userId}:${roleId}`;
     if (inFlightRequests.has(lockKey)) {
       logger.info(`Idempotency Lock: Awaiting in-flight for key`, { lockKey });
-      const existingData = await inFlightRequests.get(lockKey);
-      return NextResponse.json({ data: existingData }, { status: 200 });
+      try {
+        const existingData = await inFlightRequests.get(lockKey);
+        return NextResponse.json({ data: existingData }, { status: 200 });
+      } catch {
+        // H-05 fix: If the in-flight request failed, let this request fall through
+        // to generate its own roadmap (or hit the DB idempotency check above)
+        logger.warn(`In-flight request failed for key=${lockKey}, retrying fresh`);
+        // Check DB again — the original request may have persisted before failing
+        const retryCheck = await getRoadmap(userId, roleId);
+        if (retryCheck) {
+          return NextResponse.json({ data: retryCheck }, { status: 200 });
+        }
+        // Fall through to generate below
+      }
     }
 
     logger.info(`Starting Roadmap Generation`, { roleTitle, userId });
@@ -166,7 +180,7 @@ export async function POST(req: Request) {
     logger.error("Generation failed. Triggering Graceful Degradation.", { 
       userId: userId_context,
       roleId: requestRoleId,
-      error: error.message 
+      error: sanitizeError(error),
     });
 
     // Graceful Degradation: provide static fallback payload
@@ -185,25 +199,22 @@ export async function POST(req: Request) {
   }
 }
 
-// ============================================
-// PATCH /api/roadmap
-// ============================================
 export async function PATCH(req: Request) {
-  let userId_context = "unauthenticated";
+  const trace = createApiTracer("PATCH /api/roadmap");
   try {
     const authResult = await getAuthenticatedUser();
     if (authResult.errorResponse) {
       return unauthorizedResponse(authResult.errorResponse, authResult.status);
     }
     const userId = authResult.user.userId;
-    userId_context = userId;
+    trace.userId = userId;
 
     const body = await req.json();
 
     // Validate with Zod schema (userId removed from schema)
     const parseResult = patchRoadmapRequestSchema.safeParse(body);
     if (!parseResult.success) {
-      logger.warn("Invalid PATCH body", { userId, error: parseResult.error.flatten() });
+      trace.fail(400, "Invalid PATCH body", { error: JSON.stringify(parseResult.error.flatten()) });
       return NextResponse.json(
         { error: "Invalid request body." },
         { status: 400 }
@@ -211,21 +222,29 @@ export async function PATCH(req: Request) {
     }
 
     const { roleId, topicId, completed } = parseResult.data;
+    trace.step("validated", { roleId, topicId, action: completed ? "complete" : "uncomplete" });
 
     // Secure database update — scoped tightly by userId
     const updated = await updateTopicCompletion(userId, roleId, topicId, completed);
 
     if (!updated) {
-       logger.warn("PATCH failed: Topic not found or unauthorized", { userId, roleId, topicId });
+      trace.fail(404, "Topic not found or unauthorized", { roleId, topicId });
       return NextResponse.json(
         { error: `Topic '${topicId}' not found for this user and role.` },
         { status: 404 }
       );
     }
 
+    trace.success({ roleId, topicId });
+
+    // #5: Guarded analytics — never breaks core flow
+    if (completed) {
+      logger.analytics("TOPIC_COMPLETED", { userId, roleId, topicId, requestId: trace.requestId });
+    }
+
     return NextResponse.json({ success: true, data: updated }, { status: 200 });
   } catch (error: any) {
-    logger.error("PATCH /api/roadmap failed", { userId: userId_context, error: error.message });
+    trace.fail(500, sanitizeError(error));
     return NextResponse.json(
       { error: "Failed to update topic completion." },
       { status: 500 }

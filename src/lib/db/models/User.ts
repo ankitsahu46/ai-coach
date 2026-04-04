@@ -3,9 +3,9 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 // ============================================
 // USER MODEL
 // ============================================
-// TODO: Replace userId with session-based auth (NextAuth/Clerk)
-// Currently userId is passed from client — NOT production-safe.
-// This model is the foundation for future auth integration.
+// Core identity model. Authentication is handled via NextAuth (Google OAuth).
+// Email is the unique identifier across providers.
+// syncUserWithDb (auth.service.ts) upserts on every sign-in.
 // ============================================
 
 export interface IUser extends Document {

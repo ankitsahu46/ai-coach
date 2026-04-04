@@ -4,6 +4,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import Link from "next/link";
 import { LayoutDashboard, LogIn, LogOut, Loader2, User, Mail, ChevronDown } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { useRoadmapStore } from "@/features/roadmap/store/useRoadmapStore";
 
 export function AuthMenu() {
   const { data: session, status } = useSession();
@@ -99,6 +100,9 @@ export function AuthMenu() {
                       localStorage.removeItem(key);
                     }
                   }
+                  // M-08: Clear Zustand store to prevent cross-user data leakage
+                  useRoadmapStore.getState().setRoadmapData(null);
+                  useRoadmapStore.getState().setError(null);
                   signOut({ callbackUrl: "/" });
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg hover:bg-red-500/10 text-white/70 hover:text-red-400 transition-colors text-sm font-medium"

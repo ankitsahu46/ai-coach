@@ -71,9 +71,9 @@ export type NormalizedRoadmap = z.infer<typeof normalizedRoadmapSchema>;
  * Secured via NextAuth session (userId is extracted server-side)
  */
 export const postRoadmapRequestSchema = z.object({
-  roleTitle: z.string().min(1, "roleTitle is required"),
-  roleDescription: z.string().optional(),
-  roleId: z.string().min(1, "roleId is required"),
+  roleTitle: z.string().min(1, "roleTitle is required").max(200, "roleTitle too long"),
+  roleDescription: z.string().max(2000, "roleDescription too long").optional(),
+  roleId: z.string().min(1, "roleId is required").max(100, "roleId too long"),
   importedRoadmap: normalizedRoadmapSchema.optional().describe("For migrating guest roadmaps directly to DB"),
 });
 

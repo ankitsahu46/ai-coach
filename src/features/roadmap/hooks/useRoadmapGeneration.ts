@@ -264,33 +264,43 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
       : Math.round((completedCount / roadmapData.topics.length) * 100);
 
   // ── Bound toggle: Orchestrates state + API side-effects ──
-  const isLoggingRef = useRef(false);
+  // Per-topic in-flight tracker — allows concurrent PATCHes for DIFFERENT topics
+  // while preventing rapid spam on the SAME topic (C-01 fix)
+  const inFlightTopicsRef = useRef<Set<string>>(new Set());
   const consistencyDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingConsistencyCountRef = useRef(0);
 
   const boundToggle = useCallback(
     async (topicId: string) => {
-      // Optimistic update
-      const current = useRoadmapStore.getState().roadmapData;
-      if (!current) return;
-      const topicIndex = current.topics.findIndex((t) => t.id === topicId);
+      // Snapshot pre-toggle state for rollback (H-01 fix)
+      const snapshotBeforeToggle = useRoadmapStore.getState().roadmapData;
+      if (!snapshotBeforeToggle) return;
+      const topicIndex = snapshotBeforeToggle.topics.findIndex((t) => t.id === topicId);
       if (topicIndex === -1) return;
-      const isCompletedNow = !current.topics[topicIndex].completed;
+      const isCompletedNow = !snapshotBeforeToggle.topics[topicIndex].completed;
 
-      // Update Zustand globally
+      // Update Zustand globally (optimistic)
       toggleTopicCompletion(topicId, isAuthRef.current, userIdRef.current);
 
-      if (!isAuthRef.current) return; // Guests stop here
+      if (!isAuthRef.current) return; // Guests stop here — localStorage already synced
 
-      // Debounce API dispatch for Roadmap PATCH (protects against rapid spamming the SAME topic)
-      if (isLoggingRef.current) return;
-      isLoggingRef.current = true;
+      // Per-topic dedup: block only the SAME topic if already in-flight
+      if (inFlightTopicsRef.current.has(topicId)) {
+        // Rollback: this toggle was optimistic but we can't sync it
+        logger.warn("Topic PATCH already in-flight — rolling back optimistic toggle", { topicId });
+        setRoadmapData(snapshotBeforeToggle);
+        setCachedRoadmap(snapshotBeforeToggle.roleId, snapshotBeforeToggle, userIdRef.current);
+        return;
+      }
+
+      inFlightTopicsRef.current.add(topicId);
 
       try {
         const patchRes = await fetch("/api/roadmap", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            roleId: current.roleId,
+            roleId: snapshotBeforeToggle.roleId,
             topicId,
             completed: isCompletedNow,
           }),
@@ -306,31 +316,40 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
           setCachedRoadmap(confirmed.roleId, confirmed, userIdRef.current);
 
           // Only log to consistency engine if it was a MARK AS COMPLETED action.
-          // Coalesce / batching write implementation
+          // Counter-based coalescing — accumulates count, fires once after debounce (C-02 fix)
           if (isCompletedNow) {
+            pendingConsistencyCountRef.current += 1;
+
             if (consistencyDebounceRef.current) {
               clearTimeout(consistencyDebounceRef.current);
             }
             
-            // Queue up the single merged hit for 2 seconds
+            // Flush all accumulated completions after 2 seconds of inactivity
             consistencyDebounceRef.current = setTimeout(() => {
-              fetch("/api/consistency/log", {
-                 method: "POST",
-                 headers: { "Content-Type": "application/json" },
-                 body: JSON.stringify({
-                   roleId: current.roleId,
-                   action: "TOPIC_COMPLETED"
-                 })
-              }).catch(err => logger.error("Debounced Consistency log failed", err));
+              const count = pendingConsistencyCountRef.current;
+              pendingConsistencyCountRef.current = 0;
+
+              // Fire N individual log calls to correctly increment activity count
+              for (let i = 0; i < count; i++) {
+                fetch("/api/consistency/log", {
+                   method: "POST",
+                   headers: { "Content-Type": "application/json" },
+                   body: JSON.stringify({
+                     roleId: snapshotBeforeToggle.roleId,
+                     action: "TOPIC_COMPLETED"
+                   })
+                }).catch(err => logger.error("Debounced Consistency log failed", err));
+              }
             }, 2000);
           }
         }
       } catch (err: any) {
+        // Rollback to pre-toggle snapshot on ANY failure
         logger.error("API update failed — rolling back to previous state", err);
-        setRoadmapData(current);
-        setCachedRoadmap(current.roleId, current, userIdRef.current);
+        setRoadmapData(snapshotBeforeToggle);
+        setCachedRoadmap(snapshotBeforeToggle.roleId, snapshotBeforeToggle, userIdRef.current);
       } finally {
-        isLoggingRef.current = false;
+        inFlightTopicsRef.current.delete(topicId);
       }
     },
     [toggleTopicCompletion, setRoadmapData]

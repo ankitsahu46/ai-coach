@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { syncUserWithDb } from "@/features/auth/services/auth.service";
-import { logger } from "@/features/roadmap/utils/logger";
+import { logger } from "@/lib/logger";
 
 // ============================================
 // NEXTAUTH CONFIGURATION
@@ -78,13 +78,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         // This is the bridge between signIn and jwt callbacks.
         user.id = userId;
       } catch (error) {
-        // PRO MOVE: Auth > DB.
-        // If DB sync fails, still allow login.
-        // The user enters the app; DB sync will retry on next login.
-        logger.error("AUTH_ERROR: Failed to sync user with DB.", {
+        // C-04 fix: Block sign-in when DB sync fails.
+        // Without a valid userId in the JWT, every API route returns 401 anyway,
+        // creating a confusing "signed in but unauthorized" zombie session.
+        // Better to fail fast and let the user retry.
+        logger.error("AUTH_ERROR: Failed to sync user with DB. Sign-in blocked.", {
           email,
           error: error instanceof Error ? error.message : "Unknown error",
         });
+        return false;
       }
 
       return true;

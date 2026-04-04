@@ -1,23 +1,16 @@
 // ============================================
-// STRUCTURED LOGGER
-// Environment-aware logging utility
+// LOGGER — Re-export from centralized location
+// ============================================
+// All imports of `@/features/roadmap/utils/logger` now resolve
+// to the production-grade logger at `@/lib/logger`.
+// This file exists only for backward compatibility.
+// New code should import directly from `@/lib/logger`.
 // ============================================
 
-const isDev = process.env.NODE_ENV === "development";
-
-export const logger = {
-  info: (message: string, meta?: any) => {
-    if (isDev) {
-      console.log(`[INFO][${new Date().toISOString()}] ${message}`, meta || "");
-    }
-  },
-  warn: (message: string, meta?: any) => {
-    if (isDev) {
-      console.warn(`[WARN][${new Date().toISOString()}] ${message}`, meta || "");
-    }
-  },
-  error: (message: string, meta?: any) => {
-    // We always want to see errors, even in prod, but could hook to Sentry later
-    console.error(`[ERROR][${new Date().toISOString()}] ${message}`, meta || "");
-  },
-};
+export {
+  logger,
+  createApiTracer,
+  sanitizeError,
+  generateRequestId,
+  type ApiTracer,
+} from "@/lib/logger";

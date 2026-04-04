@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { generateRoadmapForRole } from "@/features/roadmap/services/ai";
 import { normalizeRoadmapPayload } from "@/features/roadmap/utils/normalizeRoadmap";
 import {
@@ -6,21 +6,60 @@ import {
   postRoadmapRequestSchema,
   type NormalizedRoadmap,
 } from "@/features/roadmap/types";
-import { logger } from "@/features/roadmap/utils/logger";
+import { logger, createApiTracer, sanitizeError } from "@/lib/logger";
 import { getFallbackRoadmap } from "@/features/roadmap/services/fallback";
 
 // ============================================
 // API ROUTE: /api/roadmap/guest
 // POST — Generate via AI for unauthenticated users
 //
-// Security: Open. No DB persistence. Returns generated JSON only.
+// Security: Open but rate-limited. No DB persistence.
 // Client handles mapping to localStorage.
 // ============================================
+
+// H-02: IP-based rate limiting to prevent Gemini API cost attacks
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 5;
+const ipBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const bucket = ipBuckets.get(ip);
+
+  if (!bucket || now > bucket.resetAt) {
+    ipBuckets.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+
+  bucket.count += 1;
+  if (bucket.count > RATE_LIMIT_MAX_REQUESTS) {
+    return true;
+  }
+  return false;
+}
+
+// Periodic cleanup of expired IP buckets (prevents memory leak)
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, bucket] of ipBuckets) {
+    if (now > bucket.resetAt) ipBuckets.delete(ip);
+  }
+}, RATE_LIMIT_WINDOW_MS * 2);
 
 // Module-level simulated idempotency lock spanning Node processes.
 const inFlightRequests = new Map<string, Promise<NormalizedRoadmap>>();
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  // H-02: Rate limit check
+  const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  if (isRateLimited(clientIp)) {
+    logger.warn("Guest API rate limited", { ip: clientIp });
+    return NextResponse.json(
+      { error: "Too many requests. Please wait before generating another roadmap." },
+      { status: 429 }
+    );
+  }
+
   let requestRoleTitle = "Developer";
   let requestRoleId = "fallback";
 
@@ -30,7 +69,7 @@ export async function POST(req: Request) {
     // Validate with Zod schema 
     const parseResult = postRoadmapRequestSchema.safeParse(body);
     if (!parseResult.success) {
-      logger.warn("Invalid POST body (Guest)", { error: parseResult.error.flatten() });
+      logger.warn("Invalid POST body (Guest)", { error: JSON.stringify(parseResult.error.flatten()) });
       return NextResponse.json(
         { error: "Invalid request body." },
         { status: 400 }
@@ -86,7 +125,7 @@ export async function POST(req: Request) {
   } catch (error: any) {
     logger.error("Guest Generation failed. Triggering Graceful Degradation.", { 
       roleId: requestRoleId,
-      error: error.message 
+      error: sanitizeError(error),
     });
 
     // Graceful Degradation: provide static fallback payload

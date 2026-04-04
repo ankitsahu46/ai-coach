@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { logger } from "@/features/roadmap/utils/logger";
+import { logger } from "@/lib/logger";
 
 // ============================================
 // MONGODB CONNECTION — Singleton Pattern

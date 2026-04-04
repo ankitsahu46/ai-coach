@@ -35,20 +35,20 @@ export function StreakCard({ currentStreak, longestStreak, freezeCredits, lastAc
           ❄️ {freezeCredits} Freezes
         </span>
       </div>
-      
+
       <div className="flex items-baseline gap-2 mb-1">
         <span className="text-3xl font-bold font-mono text-white">
           {currentStreak}
         </span>
-        <span className="text-slate-500 text-sm">{currentStreak === 1 ? "day" : "days"}</span>
+        <span className="text-slate-500 text-sm">days</span>
       </div>
-      
+
       <div className={`text-sm font-medium bg-clip-text text-transparent mb-3 ${isAtRisk ? 'bg-gradient-to-r from-red-400 to-rose-500' : 'bg-gradient-to-r from-orange-400 to-rose-400'}`}>
         {message}
       </div>
 
       <div className="text-xs text-slate-500 pt-3 border-t border-white/5">
-        Longest streak: <strong className="text-slate-300">{longestStreak} {longestStreak === 1 ? "day" : "days"}</strong>
+        Longest streak: <strong className="text-slate-300">{longestStreak} days</strong>
       </div>
     </div>
   );

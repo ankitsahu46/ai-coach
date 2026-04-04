@@ -8,11 +8,7 @@ export function ConsistencyScoreCard({ score }: Props) {
   const [displayScore, setDisplayScore] = useState(1);
 
   useEffect(() => {
-    // Basic smooth number increasing animation
-    if (displayScore === score) return;
-
-    const stepTime = Math.max(15, Math.floor(1000 / Math.abs(score - displayScore)));
-    
+    // M-05 fix: Only re-trigger animation when target score changes
     const interval = setInterval(() => {
       setDisplayScore((prev) => {
         if (prev === score) {
@@ -21,11 +17,10 @@ export function ConsistencyScoreCard({ score }: Props) {
         }
         return prev < score ? prev + 1 : prev - 1;
       });
-    }, stepTime);
+    }, 15);
 
-    // Cancel previous animation before starting new one
     return () => clearInterval(interval);
-  }, [score, displayScore]); 
+  }, [score]); // Only re-run when the target score changes
 
   // Determine color based on target score (don't animate color)
   const colorClass = 

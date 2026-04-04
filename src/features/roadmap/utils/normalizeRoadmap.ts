@@ -23,8 +23,8 @@ export function normalizeRoadmapPayload(
     return {
       ...topic,
       difficulty: safeDifficulty,
-      id: crypto.randomUUID(), // Always generate
-      completed: false, // Default uncompleted state
+      id: (topic as any).id || crypto.randomUUID(), // H-06: preserve existing IDs (migration safety)
+      completed: (topic as any).completed ?? false, // Preserve existing completion state
     };
   });
 

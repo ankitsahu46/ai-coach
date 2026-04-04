@@ -1,14 +1,14 @@
 import { connectDB } from "@/lib/db/connection";
 import { Roadmap, type IRoadmap } from "@/lib/db/models";
 import type { NormalizedRoadmap, NormalizedTopic } from "../types";
-import { logger } from "../utils/logger";
+import { logger } from "@/lib/logger";
 
 // ============================================
 // DATABASE SERVICE LAYER
 // ============================================
 // All DB logic lives HERE — never in API routes.
 // Functions return NormalizedRoadmap (frontend-ready shape).
-// TODO: Replace userId with session-based auth (NextAuth)
+// Auth: userId comes from server-side session (NextAuth).
 // ============================================
 
 /**
@@ -21,7 +21,7 @@ function toNormalizedRoadmap(doc: IRoadmap): NormalizedRoadmap {
     role: doc.roleTitle, // Backward compat: 'role' = human-readable title
     roleId: doc.roleId,
     roleTitle: doc.roleTitle,
-    userId: doc.userId.toString(),
+    // M-07: userId intentionally omitted — internal DB identifier should not leak to client
     isFallback: doc.isFallback ?? false,
     topics: doc.topics.map((t) => ({
       id: t.id,
@@ -64,7 +64,7 @@ export async function getRoadmap(
     role: doc.roleTitle,
     roleId: doc.roleId,
     roleTitle: doc.roleTitle,
-    userId: doc.userId.toString(),
+    // M-07: userId intentionally omitted — internal DB identifier should not leak to client
     isFallback: doc.isFallback ?? false,
     topics: doc.topics.map((t) => ({
       id: t.id,

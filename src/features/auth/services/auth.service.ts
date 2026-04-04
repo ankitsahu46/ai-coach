@@ -1,6 +1,6 @@
 import { connectDB } from "@/lib/db/connection";
 import { User } from "@/lib/db/models";
-import { logger } from "@/features/roadmap/utils/logger";
+import { logger } from "@/lib/logger";
 
 // ============================================
 // AUTH SERVICE — Database Sync Layer
@@ -34,7 +34,7 @@ export async function syncUserWithDb(
   // Without this, serverless cold starts will cause random failures.
   await connectDB();
 
-  const user = await User.findOneAndUpdate(
+  const result = await User.findOneAndUpdate(
     { email: email.toLowerCase().trim() },
     {
       $setOnInsert: { email: email.toLowerCase().trim() },
@@ -44,13 +44,18 @@ export async function syncUserWithDb(
       upsert: true, // Create if doesn't exist
       returnDocument: "after", // Return the updated document (replaces deprecated `new: true`)
       runValidators: true, // Enforce schema validation
+      includeResultMetadata: true, // L-02: Expose upserted metadata for new-user detection
     }
   );
+
+  const user = result.value!;
+  // L-02 fix: Use MongoDB's lastErrorObject to detect new users reliably
+  const isNew = !!(result.lastErrorObject as any)?.upserted;
 
   logger.info("AUTH_SERVICE: User synced with DB", {
     userId: user._id.toString(),
     email: user.email,
-    isNew: !user.createdAt, // createdAt only exists after first insert
+    isNew,
   });
 
   return { userId: user._id.toString() };

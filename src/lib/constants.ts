@@ -1,4 +1,3 @@
-import type { Difficulty } from "@/types";
 import type { BadgeVariant } from "@/components/atoms/Badge";
 
 // ============================================
@@ -11,11 +10,16 @@ export const APP_ROUTES = {
   roadmap: "/roadmap",
 } as const;
 
-/** Maps difficulty levels to badge color variants (used by RoleCard, RoadmapPage, etc.) */
-export const DIFFICULTY_BADGE_VARIANT: Record<Difficulty, BadgeVariant> = {
+/** Maps difficulty levels to badge color variants (supports both casings) */
+export const DIFFICULTY_BADGE_VARIANT: Record<string, BadgeVariant> = {
+  // Lowercase (global types)
   beginner: "primary",
   intermediate: "secondary",
   advanced: "accent",
+  // PascalCase (AI/Zod schema — L-08 fix)
+  Beginner: "primary",
+  Intermediate: "secondary",
+  Advanced: "accent",
 } as const;
 
 /** localStorage keys — prevents typo-based bugs */
