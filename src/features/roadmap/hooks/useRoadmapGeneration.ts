@@ -338,7 +338,17 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
                      roleId: snapshotBeforeToggle.roleId,
                      action: "TOPIC_COMPLETED"
                    })
-                }).catch(err => logger.error("Debounced Consistency log failed", err));
+                })
+                .then(res => {
+                  if (!res.ok) throw new Error("Consistency log failed");
+                  return res.json();
+                })
+                .then(json => {
+                   if (json.data) {
+                     useRoadmapStore.getState().setConsistencyData(json.data);
+                   }
+                })
+                .catch(err => logger.error("Debounced Consistency log failed", err));
               }
             }, 2000);
           }
@@ -355,12 +365,11 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
     [toggleTopicCompletion, setRoadmapData]
   );
 
-  // Cleanup debounce on unmount to prevent memory leaks and ghost calls
+  // Do NOT cancel the debounce on unmount (FIX: Data Loss on immediate navigation)
+  // We want the pending consistency log API call to fire even if the user leaves the page.
   useEffect(() => {
     return () => {
-      if (consistencyDebounceRef.current) {
-        clearTimeout(consistencyDebounceRef.current);
-      }
+       // Deliberately left empty
     };
   }, []);
 

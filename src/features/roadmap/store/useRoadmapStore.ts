@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { NormalizedRoadmap } from "../types";
+import type { NormalizedConsistency } from "../../consistency/types";
 import { logger } from "../utils/logger";
 
 // ============================================
@@ -53,6 +54,9 @@ interface RoadmapState {
   /** The roadmap data — THE single source of truth */
   roadmapData: NormalizedRoadmap | null;
 
+  /** The consistency data — THE single source of truth */
+  consistencyData: NormalizedConsistency | null;
+
   /** UI loading flags */
   isLoading: boolean;
   isDelayedUX: boolean;
@@ -60,6 +64,7 @@ interface RoadmapState {
 
   /** Simple setters */
   setRoadmapData: (data: NormalizedRoadmap | null) => void;
+  setConsistencyData: (data: NormalizedConsistency | null) => void;
   setLoading: (v: boolean) => void;
   setDelayedUX: (v: boolean) => void;
   setError: (v: string | null) => void;
@@ -80,12 +85,14 @@ interface RoadmapState {
 export const useRoadmapStore = create<RoadmapState>((set, get) => ({
   // ── Initial State ──
   roadmapData: null,
+  consistencyData: null,
   isLoading: false,
   isDelayedUX: false,
   error: null,
 
   // ── Setters ──
   setRoadmapData: (data) => set({ roadmapData: data }),
+  setConsistencyData: (data) => set({ consistencyData: data }),
   setLoading: (v) => set({ isLoading: v }),
   setDelayedUX: (v) => set({ isDelayedUX: v }),
   setError: (v) => set({ error: v }),
@@ -115,6 +122,34 @@ export const useRoadmapStore = create<RoadmapState>((set, get) => ({
     // 2. Sync to localStorage
     setCachedRoadmap(current.roleId, optimistic, userId);
 
-    logger.info("Topic completion toggled in store", { topicId, completed: updatedTopics[topicIndex].completed });
+    // 3. OPTIMISTIC CONSISTENCY UPDATE
+    const isCompletedNow = updatedTopics[topicIndex].completed;
+    const currentConsistency = get().consistencyData;
+    
+    if (isCompletedNow && currentConsistency) {
+      const todayStr = new Date().toISOString().split("T")[0];
+      const newWeekly = [...currentConsistency.weeklyActivity];
+      const todayIndex = newWeekly.findIndex(a => a.date === todayStr);
+      let newStreak = currentConsistency.currentStreak;
+      
+      if (todayIndex > -1) {
+        newWeekly[todayIndex] = { ...newWeekly[todayIndex], count: newWeekly[todayIndex].count + 1 };
+      } else {
+        newWeekly.push({ date: todayStr, count: 1 });
+        if (currentConsistency.lastActiveDate !== todayStr) {
+           newStreak += 1;
+        }
+      }
+
+      set({ consistencyData: {
+        ...currentConsistency,
+        currentStreak: newStreak,
+        lastActiveDate: todayStr,
+        weeklyActivity: newWeekly,
+        consistencyScore: Math.min(100, currentConsistency.consistencyScore + 2) // Optimistic approximation
+      }});
+    }
+
+    logger.info("Topic completion toggled in store", { topicId, completed: isCompletedNow });
   },
 }));

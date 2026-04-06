@@ -1,26 +1,41 @@
-import useSWR from "swr";
-import type { NormalizedConsistency } from "../types";
+import { useEffect } from "react";
 import { useSession } from "next-auth/react";
-
-const fetcher = (url: string) => fetch(url).then((res) => {
-  if (!res.ok) throw new Error("Failed to fetch consistency");
-  return res.json();
-});
+import { useRoadmapStore } from "@/features/roadmap/store/useRoadmapStore";
+import { logger } from "@/lib/logger";
+import type { NormalizedConsistency } from "../types";
 
 export function useConsistency(roleId: string | null) {
   const { status } = useSession();
   const isAuthenticated = status === "authenticated";
 
-  // Only fetch if authenticated and we have a roleId
-  const { data, error, isLoading, mutate } = useSWR(
-    isAuthenticated && roleId ? `/api/consistency?roleId=${encodeURIComponent(roleId)}` : null,
-    fetcher
-  );
+  const consistencyData = useRoadmapStore((s) => s.consistencyData);
+  const setConsistencyData = useRoadmapStore((s) => s.setConsistencyData);
+
+  useEffect(() => {
+    if (!isAuthenticated || !roleId) return;
+    
+    // If we already have it in the store, don't refetch on every mount
+    if (consistencyData) return;
+
+    logger.info("Fetching consistency data into global store", { roleId });
+
+    fetch(`/api/consistency?roleId=${encodeURIComponent(roleId)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to fetch consistency");
+        return res.json();
+      })
+      .then((json) => {
+        if (json.data) {
+          setConsistencyData(json.data as NormalizedConsistency);
+        }
+      })
+      .catch((err) => logger.error("useConsistency fetch failed", err));
+  }, [isAuthenticated, roleId, consistencyData, setConsistencyData]);
 
   return {
-    consistency: data?.data as NormalizedConsistency | null,
-    isLoading,
-    error,
-    mutateConsistency: mutate
+    consistency: consistencyData,
+    isLoading: isAuthenticated && !consistencyData,
+    error: null,
   };
 }
+
