@@ -14,23 +14,34 @@ export function useConsistency(roleId: string | null) {
   useEffect(() => {
     if (!isAuthenticated || !roleId) return;
     
-    // If we already have it in the store, don't refetch on every mount
-    if (consistencyData) return;
+    const fetchFreshData = () => {
+      logger.info("Fetching consistency data into global store", { roleId });
+      fetch(`/api/consistency?roleId=${encodeURIComponent(roleId)}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to fetch consistency");
+          return res.json();
+        })
+        .then((json) => {
+          if (json.data) {
+            setConsistencyData(json.data as NormalizedConsistency);
+          }
+        })
+        .catch((err) => logger.error("useConsistency fetch failed", err));
+    };
 
-    logger.info("Fetching consistency data into global store", { roleId });
+    // Initial load
+    if (!consistencyData) fetchFreshData();
 
-    fetch(`/api/consistency?roleId=${encodeURIComponent(roleId)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch consistency");
-        return res.json();
-      })
-      .then((json) => {
-        if (json.data) {
-          setConsistencyData(json.data as NormalizedConsistency);
-        }
-      })
-      .catch((err) => logger.error("useConsistency fetch failed", err));
-  }, [isAuthenticated, roleId, consistencyData, setConsistencyData]);
+    // Cross-tab Synchronization (Instant)
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "consistency_updated") {
+        fetchFreshData();
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [isAuthenticated, roleId, consistencyData /* We might omit consistencyData from deps to avoid re-binding, but it's safe due to React closure semantics if fetchFreshData doesn't close over it stalely */, setConsistencyData]);
 
   return {
     consistency: consistencyData,

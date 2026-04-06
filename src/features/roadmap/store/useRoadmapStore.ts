@@ -126,28 +126,16 @@ export const useRoadmapStore = create<RoadmapState>((set, get) => ({
     const isCompletedNow = updatedTopics[topicIndex].completed;
     const currentConsistency = get().consistencyData;
     
+    // We only optimistically update forward progress (+1). Net drops aren't currently penalized in consistency UI.
     if (isCompletedNow && currentConsistency) {
-      const todayStr = new Date().toISOString().split("T")[0];
-      const newWeekly = [...currentConsistency.weeklyActivity];
-      const todayIndex = newWeekly.findIndex(a => a.date === todayStr);
-      let newStreak = currentConsistency.currentStreak;
+      const { computeNextConsistencyState } = require("../../consistency/utils/consistencyMath");
+      const nextState = computeNextConsistencyState(currentConsistency, 1);
       
-      if (todayIndex > -1) {
-        newWeekly[todayIndex] = { ...newWeekly[todayIndex], count: newWeekly[todayIndex].count + 1 };
-      } else {
-        newWeekly.push({ date: todayStr, count: 1 });
-        if (currentConsistency.lastActiveDate !== todayStr) {
-           newStreak += 1;
-        }
+      set({ consistencyData: nextState });
+      // Notify other tabs immediately via Storage event
+      if (typeof window !== "undefined") {
+        localStorage.setItem("consistency_updated", Date.now().toString());
       }
-
-      set({ consistencyData: {
-        ...currentConsistency,
-        currentStreak: newStreak,
-        lastActiveDate: todayStr,
-        weeklyActivity: newWeekly,
-        consistencyScore: Math.min(100, currentConsistency.consistencyScore + 2) // Optimistic approximation
-      }});
     }
 
     logger.info("Topic completion toggled in store", { topicId, completed: isCompletedNow });

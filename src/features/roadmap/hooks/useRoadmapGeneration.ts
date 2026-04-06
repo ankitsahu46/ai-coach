@@ -315,43 +315,41 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
           setRoadmapData(confirmed);
           setCachedRoadmap(confirmed.roleId, confirmed, userIdRef.current);
 
-          // Only log to consistency engine if it was a MARK AS COMPLETED action.
-          // Counter-based coalescing — accumulates count, fires once after debounce (C-02 fix)
-          if (isCompletedNow) {
-            pendingConsistencyCountRef.current += 1;
+          // Calculate net positive checks for debounce
+          pendingConsistencyCountRef.current += isCompletedNow ? 1 : -1;
 
-            if (consistencyDebounceRef.current) {
-              clearTimeout(consistencyDebounceRef.current);
-            }
-            
-            // Flush all accumulated completions after 2 seconds of inactivity
-            consistencyDebounceRef.current = setTimeout(() => {
-              const count = pendingConsistencyCountRef.current;
-              pendingConsistencyCountRef.current = 0;
-
-              // Fire N individual log calls to correctly increment activity count
-              for (let i = 0; i < count; i++) {
-                fetch("/api/consistency/log", {
-                   method: "POST",
-                   headers: { "Content-Type": "application/json" },
-                   body: JSON.stringify({
-                     roleId: snapshotBeforeToggle.roleId,
-                     action: "TOPIC_COMPLETED"
-                   })
-                })
-                .then(res => {
-                  if (!res.ok) throw new Error("Consistency log failed");
-                  return res.json();
-                })
-                .then(json => {
-                   if (json.data) {
-                     useRoadmapStore.getState().setConsistencyData(json.data);
-                   }
-                })
-                .catch(err => logger.error("Debounced Consistency log failed", err));
-              }
-            }, 2000);
+          if (consistencyDebounceRef.current) {
+            clearTimeout(consistencyDebounceRef.current);
           }
+          
+          // Flush all accumulated completions after 2 seconds of inactivity
+          consistencyDebounceRef.current = setTimeout(() => {
+            const netCount = pendingConsistencyCountRef.current;
+            pendingConsistencyCountRef.current = 0; // Reset for next batch
+
+            // Send single batch log request with mathematically true count
+            if (netCount > 0) {
+              fetch("/api/consistency/log", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    roleId: snapshotBeforeToggle.roleId,
+                    action: "TOPIC_COMPLETED",
+                    count: netCount
+                  })
+              })
+              .then(res => {
+                if (!res.ok) throw new Error("Consistency batch log failed");
+                return res.json();
+              })
+              .then(json => {
+                  if (json.data) {
+                    useRoadmapStore.getState().setConsistencyData(json.data);
+                  }
+              })
+              .catch(err => logger.error("Debounced Consistency batch log failed", err));
+            }
+          }, 2000);
         }
       } catch (err: any) {
         // Rollback to pre-toggle snapshot on ANY failure

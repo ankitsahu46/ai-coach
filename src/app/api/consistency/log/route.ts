@@ -17,18 +17,28 @@ export async function POST(req: NextRequest) {
     trace.userId = userId;
 
     const body = await req.json();
+    const { roleId, action, count } = body;
 
-    if (!body || !body.roleId || body.action !== "TOPIC_COMPLETED") {
-      trace.fail(400, "Invalid body", { action: body?.action });
+    if (!roleId || action !== "TOPIC_COMPLETED") {
+      trace.fail(400, "Invalid body", { action });
       return NextResponse.json(
         { error: "Invalid request body. Requires roleId and action=='TOPIC_COMPLETED'." },
         { status: 400 }
       );
     }
 
-    const { roleId } = body;
+    const netCount = typeof count === "number" ? count : 1;
 
-    const consistencyData = await logActivity(userId, roleId);
+    // Backend Safety Verification (M-05: Prevent malicious or accidentally huge counts)
+    if (netCount <= 0 || netCount > 50) {
+      logger.warn("SUSPICIOUS_CONSISTENCY_COUNT", { userId, netCount });
+      return NextResponse.json(
+        { error: "Invalid activity count." },
+        { status: 400 }
+      );
+    }
+
+    const consistencyData = await logActivity(userId, roleId, netCount);
 
     trace.success({ roleId });
 

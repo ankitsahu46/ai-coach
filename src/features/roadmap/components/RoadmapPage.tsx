@@ -40,6 +40,34 @@ export function RoadmapPage() {
     }
   }, [isHydrated, selectedRole, router]);
 
+  // Handle auto-scrolling to a specific topic if requested via URL hash (e.g., from Dashboard)
+  useEffect(() => {
+    if (!isLoading && roadmapData && typeof window !== "undefined") {
+      const hash = window.location.hash;
+      if (hash && hash.startsWith("#topic-")) {
+        // Small delay to ensure the DOM is fully painted after the roadmap logic settles
+        const timer = setTimeout(() => {
+          const element = document.querySelector(hash);
+          if (element) {
+            // Scroll it smoothly into the center of the viewport
+            element.scrollIntoView({ behavior: "smooth", block: "center" });
+            
+            // Briefly highlight the target card to draw user attention
+            element.classList.add("border-primary", "shadow-[0_0_30px_-5px_rgba(0,255,100,0.3)]");
+            setTimeout(() => {
+              element.classList.remove("border-primary", "shadow-[0_0_30px_-5px_rgba(0,255,100,0.3)]");
+            }, 2000);
+
+            // Important: Clear the hash from the URL so subsequent re-renders (like toggling checkboxes) 
+            // don't re-trigger this scroll effect unexpectedly.
+            window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          }
+        }, 100);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isLoading, roadmapData?.isFallback]); // Only re-run if loading state changes (initial mount or fetching complete). Removing roadmapData prevents scroll-jumping on checkbox clicks.
+
   // Loading state while hydrating from localStorage
   if (!isHydrated) {
     return (
@@ -196,9 +224,8 @@ export function RoadmapPage() {
                 />
               </div>
             </div>
-            
             {roadmapData.topics.map((topic, index) => (
-              <Card key={topic.id} variant="default" className="hover:border-primary/50 transition-colors">
+              <Card id={`topic-${topic.id}`} key={topic.id} variant="default" className="hover:border-primary/50 transition-colors">
                 <div className="p-6 flex flex-col md:flex-row gap-6 items-start">
                   <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
                     {index + 1}

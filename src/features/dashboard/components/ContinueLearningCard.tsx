@@ -46,7 +46,7 @@ export function ContinueLearningCard({ roleId, nextTopic }: ContinueLearningCard
         </p>
 
         <Link
-          href="/roadmap"
+          href={`/roadmap#topic-${nextTopic.id}`}
           className="inline-flex items-center justify-center gap-2 w-full px-6 py-3.5 rounded-xl bg-white text-black font-semibold hover:bg-white/90 transition-transform active:scale-[0.98]"
         >
           <span>Continue Learning</span>
