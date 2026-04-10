@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { useRole } from "@/features/role-selection/hooks/useRole";
 import { useRoadmapGeneration } from "../hooks/useRoadmapGeneration";
 import { TopicSkeleton } from "./TopicSkeleton";
@@ -12,26 +12,417 @@ import { Badge } from "@/components/atoms/Badge";
 import { ClockIcon, ClipboardIcon, BoltIcon } from "@/components/icons";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { DIFFICULTY_BADGE_VARIANT, APP_ROUTES } from "@/lib/constants";
-import { fadeInUp, sectionSpring } from "@/lib/animations";
+import { fadeInUp } from "@/lib/animations";
+import type { Topic, Subtopic, Task, TaskState } from "../types";
 
 // ============================================
-// ROADMAP PAGE — Displays selected role info
-// (AI-generated roadmap content comes in a future step)
+// ROADMAP PAGE — Hierarchical Accordion UI
+// ============================================
+// Renders: Topic (accordion) → Subtopic (section) → Task (row)
+// All task state derived via selectors — NO shared-logic imports.
+// Actions dispatched via hook's handleTaskAction.
+//
+// Production hardening:
+//   - Buttons disabled while task action is in-flight (spam prevention)
+//   - Toast feedback on success/failure (via hook)
+//   - Visual state mapping for all task states
+//   - Skeleton loading for initial roadmap generation
+//   - Empty + error states with CTAs
+// ============================================
+
+// ── Visual state mapping ──
+const STATE_STYLES: Record<TaskState, { bg: string; text: string; border: string; icon: string }> = {
+  completed: {
+    bg: "bg-emerald-500/10",
+    text: "text-emerald-400",
+    border: "border-emerald-500/20",
+    icon: "✅",
+  },
+  available: {
+    bg: "bg-primary/5",
+    text: "text-foreground",
+    border: "border-border",
+    icon: "🔓",
+  },
+  locked: {
+    bg: "bg-background-secondary/50",
+    text: "text-muted/60",
+    border: "border-border/30",
+    icon: "🔒",
+  },
+  skipped: {
+    bg: "bg-zinc-500/5",
+    text: "text-muted",
+    border: "border-zinc-500/20",
+    icon: "⏭",
+  },
+};
+
+// ── Task Row Component ──
+function TaskRow({
+  task,
+  state,
+  isRecommended,
+  isBusy,
+  onAction,
+}: {
+  task: Task;
+  state: TaskState;
+  isRecommended: boolean;
+  isBusy: boolean;
+  onAction: (taskId: string, action: "complete" | "skip" | "uncomplete" | "unskip") => void;
+}) {
+  const styles = STATE_STYLES[state];
+  const isLocked = state === "locked";
+
+  return (
+    <motion.div
+      id={`task-${task.id}`}
+      layout
+      initial={false}
+      animate={{ scale: state === "completed" ? 1.02 : 1, opacity: 1 }}
+      whileTap={{ scale: 0.985 }}
+      transition={{ type: "spring", stiffness: 300, damping: 20 }}
+      className={`flex items-center gap-3 px-4 py-3 rounded-lg border transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${styles.bg} ${styles.border} ${isLocked ? "opacity-60" : "hover:border-primary/30"} ${isRecommended ? "ring-1 ring-primary/40 shadow-sm shadow-primary/10" : ""}`}
+      aria-busy={isBusy}
+      tabIndex={isLocked ? -1 : 0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          if (state === "available") onAction(task.id, "complete");
+          else if (state === "completed") onAction(task.id, "uncomplete");
+          else if (state === "skipped") onAction(task.id, "unskip");
+        }
+      }}
+    >
+      {/* State icon — show spinner when busy */}
+      <span className="text-sm shrink-0" aria-hidden="true">
+        {isBusy ? (
+          <span className="inline-block w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        ) : (
+          styles.icon
+        )}
+      </span>
+
+      {/* Task info */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className={`text-sm font-medium truncate ${styles.text}`}>
+            {task.title}
+          </span>
+          {isRecommended && (
+            <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-primary/15 text-primary border border-primary/20 shrink-0">
+              Next
+            </span>
+          )}
+          {task.isOptional && (
+            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 shrink-0">
+              Optional
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 mt-0.5">
+          <span className="text-xs text-muted capitalize">{task.type}</span>
+          <span className="text-xs text-muted/60">⏱ {task.estimatedTime}</span>
+        </div>
+      </div>
+
+      {/* Action buttons — disabled when in-flight */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {state === "available" && (
+          <>
+            <button
+              onClick={() => onAction(task.id, "complete")}
+              disabled={isBusy}
+              aria-disabled={isBusy}
+              aria-busy={isBusy}
+              className="px-3 py-1 text-xs font-medium rounded-md bg-primary text-black hover:bg-primary-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isBusy ? "Saving..." : "Complete"}
+            </button>
+            {task.isSkippable && (
+              <button
+                onClick={() => onAction(task.id, "skip")}
+                disabled={isBusy}
+                aria-disabled={isBusy}
+                className="px-3 py-1 text-xs font-medium rounded-md border border-border text-muted hover:text-foreground hover:border-primary/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Skip
+              </button>
+            )}
+          </>
+        )}
+        {state === "completed" && (
+          <button
+            onClick={() => onAction(task.id, "uncomplete")}
+            disabled={isBusy}
+            aria-disabled={isBusy}
+            aria-busy={isBusy}
+            className="px-3 py-1 text-xs font-medium rounded-md border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isBusy ? "Saving..." : "Undo"}
+          </button>
+        )}
+        {state === "skipped" && (
+          <button
+            onClick={() => onAction(task.id, "unskip")}
+            disabled={isBusy}
+            aria-disabled={isBusy}
+            aria-busy={isBusy}
+            className="px-3 py-1 text-xs font-medium rounded-md border border-zinc-500/30 text-muted hover:text-foreground hover:border-primary/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isBusy ? "Saving..." : "Unskip"}
+          </button>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+// ── Subtopic Section ──
+function SubtopicSection({
+  subtopic,
+  taskStates,
+  inFlightTasks,
+  recommendedTaskId,
+  onAction,
+}: {
+  subtopic: Subtopic;
+  taskStates: Map<string, TaskState>;
+  inFlightTasks: Set<string>;
+  recommendedTaskId: string | null;
+  onAction: (taskId: string, action: "complete" | "skip" | "uncomplete" | "unskip") => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {/* Subtopic header */}
+      <div className="flex items-center gap-2 px-1">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted/70">
+          {subtopic.title}
+        </span>
+        {subtopic.type !== "core" && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-secondary/10 text-secondary border border-secondary/20 capitalize">
+            {subtopic.type}
+          </span>
+        )}
+      </div>
+
+      {/* Task rows */}
+      <div className="space-y-1.5">
+        {subtopic.tasks.map((task) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            state={taskStates.get(task.id) ?? "locked"}
+            isRecommended={task.id === recommendedTaskId}
+            isBusy={inFlightTasks.has(task.id)}
+            onAction={onAction}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Topic Accordion ──
+function TopicAccordion({
+  topic,
+  index,
+  taskStates,
+  inFlightTasks,
+  recommendedTaskId,
+  onAction,
+  isExpanded,
+  onToggle,
+}: {
+  topic: Topic;
+  index: number;
+  taskStates: Map<string, TaskState>;
+  inFlightTasks: Set<string>;
+  recommendedTaskId: string | null;
+  onAction: (taskId: string, action: "complete" | "skip" | "uncomplete" | "unskip") => void;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  // Compute topic progress from task states
+  let totalTasks = 0;
+  let completedTasks = 0;
+  for (const sub of topic.subtopics) {
+    for (const task of sub.tasks) {
+      totalTasks++;
+      if (taskStates.get(task.id) === "completed") completedTasks++;
+    }
+  }
+  const topicPercentage = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
+  const isTopicDone = totalTasks > 0 && completedTasks === totalTasks;
+
+  return (
+    <Card
+      id={`topic-${topic.id}`}
+      variant="default"
+      padding="none"
+      className={`transition-colors duration-200 ${isTopicDone ? "border-emerald-500/30" : "hover:border-primary/40"}`}
+    >
+      {/* Accordion header */}
+      <button
+        onClick={onToggle}
+        className="w-full p-5 flex items-center gap-4 text-left group cursor-pointer"
+        aria-expanded={isExpanded}
+      >
+        {/* Number badge */}
+        <div
+          className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shrink-0 transition-colors ${
+            isTopicDone
+              ? "bg-emerald-500/20 text-emerald-400"
+              : "bg-primary/10 text-primary"
+          }`}
+        >
+          {isTopicDone ? "✓" : index + 1}
+        </div>
+
+        {/* Topic info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <h3 className="text-base font-semibold text-foreground truncate">
+              {topic.title}
+            </h3>
+            <Badge variant={DIFFICULTY_BADGE_VARIANT[topic.difficulty]}>
+              {topic.difficulty}
+            </Badge>
+            {topic.isOptional && (
+              <Badge variant="outline">Optional</Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-3 text-xs text-muted">
+            <span className="flex items-center gap-1">
+              <ClockIcon className="w-3 h-3" /> {topic.estimatedTime}
+            </span>
+            <span>{completedTasks}/{totalTasks} tasks</span>
+            <span className="font-semibold text-primary">{topicPercentage}%</span>
+          </div>
+        </div>
+
+        {/* Progress bar (mini) */}
+        <div className="hidden sm:flex items-center gap-3 shrink-0">
+          <div className="w-24 h-1.5 bg-background-secondary rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${isTopicDone ? "bg-emerald-500" : "bg-primary"}`}
+              style={{ width: `${topicPercentage}%`, transition: "width 300ms ease" }}
+            />
+          </div>
+        </div>
+
+        {/* Chevron */}
+        <svg
+          className={`w-4 h-4 text-muted transition-transform duration-200 shrink-0 ${isExpanded ? "rotate-180" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {/* Accordion body */}
+      <AnimatePresence initial={false}>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: "easeInOut" }}
+            className="overflow-hidden"
+          >
+            <div className="px-5 pb-5 space-y-4 border-t border-border/50 pt-4">
+              {/* Topic description */}
+              <p className="text-sm text-foreground-secondary leading-relaxed">
+                {topic.description}
+              </p>
+
+              {/* Subtopics → Tasks */}
+              {topic.subtopics.map((subtopic) => (
+                <SubtopicSection
+                  key={subtopic.id}
+                  subtopic={subtopic}
+                  taskStates={taskStates}
+                  inFlightTasks={inFlightTasks}
+                  recommendedTaskId={recommendedTaskId}
+                  onAction={onAction}
+                />
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Card>
+  );
+}
+
+// ── Task Skeleton (for inside accordions during partial loads) ──
+function TaskSkeleton() {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-border/30 bg-background-secondary/30 animate-pulse">
+      <div className="w-4 h-4 rounded-full bg-border/40 shrink-0" />
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="h-3.5 bg-border/40 rounded w-2/3" />
+        <div className="h-2.5 bg-border/30 rounded w-1/3" />
+      </div>
+      <div className="h-6 w-16 bg-border/30 rounded shrink-0" />
+    </div>
+  );
+}
+
+// ============================================
+// MAIN ROADMAP PAGE
 // ============================================
 
 export function RoadmapPage() {
   const { selectedRole, isHydrated, clearRole } = useRole();
-  const { 
-    roadmapData, 
-    completedCount, 
-    progressPercentage, 
-    isLoading, 
-    isDelayedUX, 
-    error, 
-    retryGenerate, 
-    toggleTopicCompletion 
+  const {
+    roadmapData,
+    stats,
+    nextTask,
+    taskStates,
+    inFlightTasks,
+    isLoading,
+    isDelayedUX,
+    error,
+    retryGenerate,
+    handleTaskAction,
   } = useRoadmapGeneration(selectedRole);
   const router = useRouter();
+
+  // Track which topics are expanded
+  const [expandedTopics, setExpandedTopics] = useState<Set<string>>(new Set());
+
+  const toggleTopic = useCallback((topicId: string) => {
+    setExpandedTopics((prev) => {
+      const next = new Set(prev);
+      if (next.has(topicId)) {
+        next.delete(topicId);
+      } else {
+        next.add(topicId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Auto-expand the topic containing the recommended task
+  useEffect(() => {
+    if (nextTask && roadmapData) {
+      for (const topic of roadmapData.topics) {
+        for (const sub of topic.subtopics) {
+          if (sub.tasks.some((t) => t.id === nextTask.id)) {
+            setExpandedTopics((prev) => {
+              if (prev.has(topic.id)) return prev;
+              return new Set(prev).add(topic.id);
+            });
+            return;
+          }
+        }
+      }
+    }
+  }, [nextTask?.id, roadmapData?.topics]);
 
   // Redirect to home if no role selected (after hydration)
   useEffect(() => {
@@ -40,33 +431,42 @@ export function RoadmapPage() {
     }
   }, [isHydrated, selectedRole, router]);
 
-  // Handle auto-scrolling to a specific topic if requested via URL hash (e.g., from Dashboard)
+  // Handle auto-scrolling to a specific topic/task if requested via URL hash
   useEffect(() => {
     if (!isLoading && roadmapData && typeof window !== "undefined") {
       const hash = window.location.hash;
-      if (hash && hash.startsWith("#topic-")) {
-        // Small delay to ensure the DOM is fully painted after the roadmap logic settles
+      if (hash && (hash.startsWith("#topic-") || hash.startsWith("#task-"))) {
         const timer = setTimeout(() => {
-          const element = document.querySelector(hash);
-          if (element) {
-            // Scroll it smoothly into the center of the viewport
-            element.scrollIntoView({ behavior: "smooth", block: "center" });
-            
-            // Briefly highlight the target card to draw user attention
-            element.classList.add("border-primary", "shadow-[0_0_30px_-5px_rgba(0,255,100,0.3)]");
-            setTimeout(() => {
-              element.classList.remove("border-primary", "shadow-[0_0_30px_-5px_rgba(0,255,100,0.3)]");
-            }, 2000);
-
-            // Important: Clear the hash from the URL so subsequent re-renders (like toggling checkboxes) 
-            // don't re-trigger this scroll effect unexpectedly.
-            window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          // If targeting a task, also expand its parent topic
+          if (hash.startsWith("#task-")) {
+            const taskId = hash.slice(6);
+            for (const topic of roadmapData.topics) {
+              for (const sub of topic.subtopics) {
+                if (sub.tasks.some((t) => t.id === taskId)) {
+                  setExpandedTopics((prev) => new Set(prev).add(topic.id));
+                  break;
+                }
+              }
+            }
           }
+
+          // Small extra delay to allow accordion expansion
+          setTimeout(() => {
+            const element = document.querySelector(hash);
+            if (element) {
+              element.scrollIntoView({ behavior: "smooth", block: "center" });
+              element.classList.add("border-primary", "shadow-[0_0_30px_-5px_rgba(0,255,100,0.3)]");
+              setTimeout(() => {
+                element.classList.remove("border-primary", "shadow-[0_0_30px_-5px_rgba(0,255,100,0.3)]");
+              }, 2000);
+              window.history.replaceState(null, "", window.location.pathname + window.location.search);
+            }
+          }, 300);
         }, 100);
         return () => clearTimeout(timer);
       }
     }
-  }, [isLoading, roadmapData?.isFallback]); // Only re-run if loading state changes (initial mount or fetching complete). Removing roadmapData prevents scroll-jumping on checkbox clicks.
+  }, [isLoading, roadmapData?.isFallback]);
 
   // Loading state while hydrating from localStorage
   if (!isHydrated) {
@@ -89,6 +489,8 @@ export function RoadmapPage() {
     clearRole();
     router.push(APP_ROUTES.home);
   };
+
+  const recommendedTaskId = nextTask?.id ?? null;
 
   return (
     <>
@@ -157,7 +559,7 @@ export function RoadmapPage() {
               )}
             </div>
             
-            {/* 5 Exact-height Skeleton Placeholders */}
+            {/* Skeleton placeholders — match real accordion layout */}
             {Array.from({ length: 5 }).map((_, i) => (
               <TopicSkeleton key={`skeleton-${i}`} />
             ))}
@@ -186,7 +588,7 @@ export function RoadmapPage() {
                 We couldn't locate a generated roadmap for <span className="text-foreground font-medium">{selectedRole.title}</span>. Let's create one now.
               </p>
               <Button onClick={retryGenerate} variant="primary">
-                Try Again
+                Generate Roadmap
                 <BoltIcon />
               </Button>
             </div>
@@ -207,59 +609,46 @@ export function RoadmapPage() {
               </div>
             )}
 
+            {/* Summary bar */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
               <div>
                 <h2 className="text-2xl font-semibold">Your Learning Path</h2>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="text-sm font-medium text-muted">{roadmapData.topics.length} Modules</span>
                   <span className="w-1 h-1 bg-border rounded-full" />
-                  <span className="text-sm font-bold text-primary">{completedCount} Completed ({progressPercentage}%)</span>
+                  <span className="text-sm font-medium text-muted">{stats.total} Tasks</span>
+                  <span className="w-1 h-1 bg-border rounded-full" />
+                  <span className="text-sm font-bold text-primary">{stats.completed} Completed ({stats.percentage}%)</span>
                 </div>
               </div>
               
               <div className="w-full md:w-48 h-2.5 bg-background-secondary rounded-full overflow-hidden border border-border/50">
                 <div 
                   className="h-full bg-primary transition-all duration-700 ease-out"
-                  style={{ width: `${progressPercentage}%` }}
+                  style={{ width: `${stats.percentage}%` }}
                 />
               </div>
             </div>
+
+            {/* Topic accordions */}
             {roadmapData.topics.map((topic, index) => (
-              <Card id={`topic-${topic.id}`} key={topic.id} variant="default" className="hover:border-primary/50 transition-colors">
-                <div className="p-6 flex flex-col md:flex-row gap-6 items-start">
-                  <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold shrink-0">
-                    {index + 1}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-lg font-semibold">{topic.title}</h3>
-                    </div>
-                    <p className="text-foreground-secondary mb-4 leading-relaxed">
-                      {topic.description}
-                    </p>
-                    <div className="flex items-center gap-4">
-                      <Badge variant={DIFFICULTY_BADGE_VARIANT[topic.difficulty.toLowerCase() as keyof typeof DIFFICULTY_BADGE_VARIANT]}>
-                        {topic.difficulty}
-                      </Badge>
-                      <span className="text-sm text-muted flex items-center gap-1.5">
-                        <ClockIcon /> {topic.estimatedTime}
-                      </span>
-                    </div>
-                  </div>
-                  
-                  {/* Progress Tracking */}
-                  <div className="shrink-0 mt-4 md:mt-0 w-full md:w-auto">
-                    <Button 
-                      variant={topic.completed ? "primary" : "outline"} 
-                      size="sm" 
-                      className="w-full"
-                      onClick={() => toggleTopicCompletion(topic.id)}
-                    >
-                      {topic.completed ? "Completed" : "Mark Complete"}
-                    </Button>
-                  </div>
-                </div>
-              </Card>
+              <motion.div
+                key={topic.id}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.05, duration: 0.3 }}
+              >
+                <TopicAccordion
+                  topic={topic}
+                  index={index}
+                  taskStates={taskStates}
+                  inFlightTasks={inFlightTasks}
+                  recommendedTaskId={recommendedTaskId}
+                  onAction={handleTaskAction}
+                  isExpanded={expandedTopics.has(topic.id)}
+                  onToggle={() => toggleTopic(topic.id)}
+                />
+              </motion.div>
             ))}
           </div>
         )}

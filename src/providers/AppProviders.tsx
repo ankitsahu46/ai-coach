@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { AuthSessionProvider } from "@/providers/AuthSessionProvider";
 import { ThemeProvider } from "@/providers/ThemeProvider";
 import { RoleProvider } from "@/features/role-selection/context/RoleContext";
+import { Toaster } from "sonner";
 
 // ============================================
 // APP PROVIDERS — Unified provider wrapper
@@ -26,7 +27,18 @@ export function AppProviders({ children }: AppProvidersProps) {
   return (
     <AuthSessionProvider>
       <ThemeProvider>
-        <RoleProvider>{children}</RoleProvider>
+        <RoleProvider>
+          {children}
+          <Toaster
+            theme="dark"
+            position="top-right"
+            toastOptions={{
+              className: "!bg-card !border-card-border !text-foreground",
+              duration: 4000,
+            }}
+            closeButton
+          />
+        </RoleProvider>
       </ThemeProvider>
     </AuthSessionProvider>
   );

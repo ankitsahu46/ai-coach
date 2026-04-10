@@ -25,7 +25,7 @@ export function DashboardContainer() {
     roadmap,
     progress,
     stats,
-    nextTopic,
+    nextTask,
     isLoading,
     isEmpty,
     error
@@ -95,7 +95,7 @@ export function DashboardContainer() {
         </div>
         <div className="lg:col-span-1">
           {/* We know selectedRole exists due to hasRole pass, but TS needs assertion or fallback */}
-          <ContinueLearningCard roleId={selectedRole?.id || roadmap.roleId} nextTopic={nextTopic} />
+          <ContinueLearningCard roleId={selectedRole?.id || roadmap.roleId} nextTask={nextTask} />
         </div>
       </div>
     </div>

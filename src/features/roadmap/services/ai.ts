@@ -41,7 +41,9 @@ async function generateWithRetry(callAi: (attempt: number) => Promise<RoadmapRes
       const isSyntaxOrTimeout =
         error instanceof SyntaxError ||
         error.message.includes("timeout") ||
-        error.name === "ZodError";
+        error.name === "ZodError" ||
+        error.status === 503 ||
+        error.message.includes("503");
 
       // If it's the last attempt or a non-retryable error, throw it upward
       if (attempt === maxAttempts || !isSyntaxOrTimeout) {
@@ -49,8 +51,8 @@ async function generateWithRetry(callAi: (attempt: number) => Promise<RoadmapRes
         throw error;
       }
       // Otherwise loop around and try again
-      logger.warn("AI generation failed. Waiting 1000ms before retrying...");
-      await new Promise((res) => setTimeout(res, 1000));
+      logger.warn("AI generation failed. Waiting 2000ms before retrying...");
+      await new Promise((res) => setTimeout(res, 2000));
     }
   }
   throw new Error("Unreachable");
@@ -84,20 +86,38 @@ You MUST return the output EXACTLY matching this JSON structure:
       "title": "Topic Name",
       "description": "Brief description of the concept and why it's important",
       "difficulty": "Beginner|Intermediate|Advanced",
-      "estimatedTime": "e.g., 2 weeks or 40 hours"
+      "estimatedTime": "e.g., 2 weeks or 40 hours",
+      "subtopics": [
+        {
+          "title": "Subtopic Name",
+          "type": "core|optional|alternative",
+          "tasks": [
+            {
+              "title": "Task Name",
+              "type": "learn|practice|project",
+              "estimatedTime": "e.g., 2 hours",
+              "isOptional": false,
+              "isSkippable": true,
+              "priorityScore": 50
+            }
+          ]
+        }
+      ]
     }
   ]
 }
 
 Rules:
 1. Provide at least 10 core topics arranged in a logical learning progression (foundational to advanced).
-2. ONLY RETURN VALID JSON. Do not include markdown formatting. Do not include any explanations before or after.
-3. The difficulty must strictly be one of: "Beginner", "Intermediate", or "Advanced".
+2. Each topic must have at least 1 subtopic, and each subtopic must have at least 2 tasks.
+3. ONLY RETURN VALID JSON. Do not include markdown formatting. Do not include any explanations before or after.
+4. The difficulty must strictly be one of: "Beginner", "Intermediate", or "Advanced".
+5. Task types must strictly be one of: "learn", "practice", or "project".
 `;
 
   return generateWithRetry(async () => {
     const aiCall = ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash", // Standard stable fast model (free tier available)
       contents: prompt,
       config: {
         responseMimeType: "application/json",

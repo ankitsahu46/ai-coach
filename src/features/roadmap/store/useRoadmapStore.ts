@@ -1,18 +1,24 @@
 import { create } from "zustand";
-import type { NormalizedRoadmap } from "../types";
+import type { NormalizedRoadmap, TaskAction, UserProgress } from "../types";
 import type { NormalizedConsistency } from "../../consistency/types";
 import { logger } from "../utils/logger";
 
 // ============================================
-// ROADMAP ZUSTAND STORE — Single Source of Truth
+// ROADMAP ZUSTAND STORE — Pure State Container
 // ============================================
 // This store is the ONLY place roadmap data lives on the client.
 // Both the Roadmap page and Dashboard read from here.
 //
-// Architecture:
-//   UI (RoadmapPage, Dashboard) → reads from store
-//   toggleCompletion → updates store + fires PATCH to DB
-//   loadRoadmap (in hook) → hydrates store from DB or cache
+// Architecture constraints:
+//   - NO business logic
+//   - NO validation
+//   - NO auth awareness
+//   - NO async operations
+//   - State mutations are minimal and reference-stable
+//
+// Flow:
+//   UI → Hook (validate + orchestrate) → Store (pure state)
+//   Selectors (shared-logic) → UI render
 // ============================================
 
 const CACHE_PREFIX = "roadmap";
@@ -70,16 +76,17 @@ interface RoadmapState {
   setError: (v: string | null) => void;
 
   /**
-   * Toggle a topic's completion status.
-   * 1. Updates global store immediately (optimistic).
-   * 2. Syncs to localStorage.
-   * 3. If authenticated, fires PATCH to MongoDB in the background.
+   * Optimistic update: mutate progress arrays based on action.
+   * Minimal reference change — only creates new array if state actually changes.
+   * NO validation. Hook must validate BEFORE calling this.
    */
-  toggleTopicCompletion: (
-    topicId: string,
-    isAuthenticated: boolean,
-    userId?: string
-  ) => void;
+  performOptimisticUpdate: (taskId: string, action: TaskAction) => void;
+
+  /**
+   * Rollback: restore an exact previous progress snapshot.
+   * Guarantees correctness for any skip/complete combo.
+   */
+  rollbackProgress: (prevProgress: UserProgress) => void;
 }
 
 export const useRoadmapStore = create<RoadmapState>((set, get) => ({
@@ -97,47 +104,75 @@ export const useRoadmapStore = create<RoadmapState>((set, get) => ({
   setDelayedUX: (v) => set({ isDelayedUX: v }),
   setError: (v) => set({ error: v }),
 
-  // ── Toggle Topic Completion ──
-  toggleTopicCompletion: (topicId, isAuthenticated, userId) => {
+  // ── Optimistic Update ──
+  performOptimisticUpdate: (taskId, action) => {
     const current = get().roadmapData;
     if (!current) return;
 
-    const topicIndex = current.topics.findIndex((t) => t.id === topicId);
-    if (topicIndex === -1) return;
+    const { completedTaskIds, skippedTaskIds } = current.progress;
 
-    const updatedTopics = [...current.topics];
-    updatedTopics[topicIndex] = {
-      ...updatedTopics[topicIndex],
-      completed: !updatedTopics[topicIndex].completed,
-    };
+    let newCompleted = completedTaskIds;
+    let newSkipped = skippedTaskIds;
 
-    const optimistic: NormalizedRoadmap = {
-      ...current,
-      topics: updatedTopics,
-    };
-
-    // 1. Update global store
-    set({ roadmapData: optimistic });
-
-    // 2. Sync to localStorage
-    setCachedRoadmap(current.roleId, optimistic, userId);
-
-    // 3. OPTIMISTIC CONSISTENCY UPDATE
-    const isCompletedNow = updatedTopics[topicIndex].completed;
-    const currentConsistency = get().consistencyData;
-    
-    // We only optimistically update forward progress (+1). Net drops aren't currently penalized in consistency UI.
-    if (isCompletedNow && currentConsistency) {
-      const { computeNextConsistencyState } = require("../../consistency/utils/consistencyMath");
-      const nextState = computeNextConsistencyState(currentConsistency, 1);
-      
-      set({ consistencyData: nextState });
-      // Notify other tabs immediately via Storage event
-      if (typeof window !== "undefined") {
-        localStorage.setItem("consistency_updated", Date.now().toString());
+    switch (action) {
+      case "complete": {
+        // Only mutate if not already present (reference stability)
+        if (!completedTaskIds.includes(taskId)) {
+          newCompleted = [...completedTaskIds, taskId];
+        }
+        break;
+      }
+      case "uncomplete": {
+        if (completedTaskIds.includes(taskId)) {
+          newCompleted = completedTaskIds.filter((id) => id !== taskId);
+        }
+        break;
+      }
+      case "skip": {
+        if (!skippedTaskIds.includes(taskId)) {
+          newSkipped = [...skippedTaskIds, taskId];
+        }
+        break;
+      }
+      case "unskip": {
+        if (skippedTaskIds.includes(taskId)) {
+          newSkipped = skippedTaskIds.filter((id) => id !== taskId);
+        }
+        break;
       }
     }
 
-    logger.info("Topic completion toggled in store", { topicId, completed: isCompletedNow });
+    // Only update if references actually changed (prevents cascade re-renders)
+    if (newCompleted === completedTaskIds && newSkipped === skippedTaskIds) {
+      return;
+    }
+
+    set({
+      roadmapData: {
+        ...current,
+        progress: {
+          ...current.progress,
+          completedTaskIds: newCompleted,
+          skippedTaskIds: newSkipped,
+        },
+      },
+    });
+
+    logger.info("Optimistic update applied", { taskId, action });
+  },
+
+  // ── Rollback ──
+  rollbackProgress: (prevProgress) => {
+    const current = get().roadmapData;
+    if (!current) return;
+
+    set({
+      roadmapData: {
+        ...current,
+        progress: prevProgress,
+      },
+    });
+
+    logger.info("Progress rolled back to snapshot");
   },
 }));

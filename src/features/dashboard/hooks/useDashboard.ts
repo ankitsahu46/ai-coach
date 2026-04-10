@@ -1,8 +1,9 @@
 import { useSession, signIn } from "next-auth/react";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useRole } from "@/features/role-selection";
-import type { NormalizedTopic, NormalizedRoadmap } from "@/features/roadmap/types";
+import type { NormalizedRoadmap, Task, ProgressStats } from "@/features/roadmap/types";
 import { useRoadmapStore, getCachedRoadmap, setCachedRoadmap } from "@/features/roadmap/store/useRoadmapStore";
+import { useRoadmapStats, useGraphCache, useNextTask } from "@/features/roadmap/store/roadmapSelectors";
 import { logger } from "@/lib/logger";
 
 // ============================================
@@ -10,7 +11,9 @@ import { logger } from "@/lib/logger";
 // ============================================
 // Reads roadmap data from the GLOBAL Zustand store.
 // The Roadmap page writes to the same store, so when
-// a topic is toggled, the Dashboard sees it INSTANTLY.
+// a task is toggled, the Dashboard sees it INSTANTLY.
+//
+// Uses selectors for derived state — no inline logic.
 //
 // M-01 fix: If store is empty on mount (direct navigation),
 // hydrate from DB via API to prevent false empty states.
@@ -25,7 +28,7 @@ export interface DashboardState {
     remaining: number;
     total: number;
   };
-  nextTopic: NormalizedTopic | null;
+  nextTask: Task | null;
   isLoading: boolean;
   isEmpty: boolean;
   error: string | null;
@@ -52,6 +55,11 @@ export function useDashboard(): DashboardState {
   const storeError = useRoadmapStore((s) => s.error);
   const setRoadmapData = useRoadmapStore((s) => s.setRoadmapData);
   const setLoading = useRoadmapStore((s) => s.setLoading);
+
+  // ── Selectors (derived state via shared-logic) ──
+  const progressStats: ProgressStats = useRoadmapStats(roadmap);
+  const graphCache = useGraphCache(roadmap);
+  const nextTask = useNextTask(roadmap, graphCache);
 
   // M-01: Hydrate store from DB on direct navigation (when store is empty)
   const hydrationAttemptedRef = useRef(false);
@@ -94,35 +102,6 @@ export function useDashboard(): DashboardState {
       });
   }, [isAuthenticated, hasRole, selectedRole, roadmap, storeIsLoading, userId, setRoadmapData, setLoading]);
 
-  // ── Derived stats (memoized) ──
-  const { progress, stats, nextTopic } = useMemo(() => {
-    if (!roadmap || !roadmap.topics || roadmap.topics.length === 0) {
-      return {
-        progress: 0,
-        stats: { completed: 0, remaining: 0, total: 0 },
-        nextTopic: null,
-      };
-    }
-
-    const total = roadmap.topics.length;
-    let completed = 0;
-    let firstIncomplete: NormalizedTopic | null = null;
-
-    for (const topic of roadmap.topics) {
-      if (topic.completed) {
-        completed++;
-      } else if (!firstIncomplete) {
-        firstIncomplete = topic;
-      }
-    }
-
-    return {
-      progress: Math.round((completed / total) * 100),
-      stats: { completed, remaining: total - completed, total },
-      nextTopic: firstIncomplete,
-    };
-  }, [roadmap]);
-
   // ── Loading state ──
   const isAuthLoading = status === "loading" || status === "unauthenticated";
   const isRoleLoading = !isHydrated;
@@ -134,7 +113,7 @@ export function useDashboard(): DashboardState {
       roadmap: null,
       progress: 0,
       stats: { completed: 0, remaining: 0, total: 0 },
-      nextTopic: null,
+      nextTask: null,
       isLoading: true,
       isEmpty: false,
       error: null,
@@ -147,9 +126,13 @@ export function useDashboard(): DashboardState {
   return {
     hasRole,
     roadmap: roadmap ?? null,
-    progress,
-    stats,
-    nextTopic,
+    progress: progressStats.percentage,
+    stats: {
+      completed: progressStats.completed,
+      remaining: progressStats.total - progressStats.completed,
+      total: progressStats.total,
+    },
+    nextTask,
     isLoading,
     isEmpty,
     error: storeError,

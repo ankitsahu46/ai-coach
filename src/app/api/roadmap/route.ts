@@ -203,6 +203,11 @@ export async function POST(req: Request) {
         throw new Error("Fallback validation failed");
       }
 
+      // CRITICAL FIX: Persist the fallback roadmap to DB so subsequent PATCh requests don't 404
+      if (userId_context !== "unauthenticated") {
+        await createRoadmap(userId_context, validFallback.data);
+      }
+
       return NextResponse.json(
         { data: validFallback.data },
         { status: 200 } // Success because fallback is still usable
@@ -227,6 +232,11 @@ export async function POST(req: Request) {
         createdAt: now,
         updatedAt: now,
       };
+
+      // CRITICAL FIX: Persist minimal roadmap to DB
+      if (userId_context !== "unauthenticated") {
+        await createRoadmap(userId_context, minimalRoadmap);
+      }
 
       return NextResponse.json(
         { data: minimalRoadmap },
