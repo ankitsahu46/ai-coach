@@ -4,7 +4,7 @@ import { normalizeRoadmapPayload } from "@/features/roadmap/utils/normalizeRoadm
 import {
   normalizedRoadmapSchema,
   postRoadmapRequestSchema,
-  patchRoadmapRequestSchema,
+  patchTaskRequestSchema,
   type NormalizedRoadmap,
 } from "@/features/roadmap/types";
 import { logger, createApiTracer, sanitizeError } from "@/lib/logger";
@@ -12,15 +12,16 @@ import { getFallbackRoadmap } from "@/features/roadmap/services/fallback";
 import {
   getRoadmap,
   createRoadmap,
-  updateTopicCompletion,
+  executeTaskAction,
 } from "@/features/roadmap/services/db";
 import { getAuthenticatedUser, unauthorizedResponse } from "@/lib/auth/server-utils";
+import { sanitizeDependencies, validateDependencyGraph } from "@/features/roadmap/types/shared-logic";
 
 // ============================================
 // API ROUTE: /api/roadmap
 // GET  — Fetch existing roadmap from DB
 // POST — Generate via AI + persist to DB (idempotent)
-// PATCH — Update topic completion (atomic)
+// PATCH — Execute task action (complete/skip/uncomplete/unskip)
 //
 // Security: Session-based auth via Auth.js
 // userId is extracted server-side, never trusted from client
@@ -151,7 +152,14 @@ export async function POST(req: Request) {
       const rawData = await generateRoadmapForRole(roleTitle, desc);
 
       // Normalize data securely across boundaries
-      const normalizedData = normalizeRoadmapPayload(rawData, roleId, null, false);
+      let normalizedData = normalizeRoadmapPayload(rawData, roleId, null, false);
+
+      // Fix 5: NEVER trust AI output — sanitize deps + validate DAG
+      normalizedData = sanitizeDependencies(normalizedData);
+      const graphResult = validateDependencyGraph(normalizedData);
+      if (!graphResult.valid) {
+        logger.warn("AI roadmap had graph cycles — auto-healed", { cycles: graphResult.cycles });
+      }
 
       // Final schema validation
       const valid = normalizedRoadmapSchema.safeParse(normalizedData);
@@ -184,20 +192,72 @@ export async function POST(req: Request) {
     });
 
     // Graceful Degradation: provide static fallback payload
-    const rawFallback = getFallbackRoadmap(requestRoleTitle);
-    const cleanFallback = normalizeRoadmapPayload(rawFallback, requestRoleId, null, true);
+    try {
+      const rawFallback = getFallbackRoadmap(requestRoleTitle);
+      const cleanFallback = sanitizeDependencies(
+        normalizeRoadmapPayload(rawFallback, requestRoleId, null, true)
+      );
 
-    const validFallback = normalizedRoadmapSchema.safeParse(cleanFallback);
-    if (!validFallback.success) {
-      return NextResponse.json({ error: "System fault." }, { status: 500 });
+      const validFallback = normalizedRoadmapSchema.safeParse(cleanFallback);
+      if (!validFallback.success) {
+        throw new Error("Fallback validation failed");
+      }
+
+      return NextResponse.json(
+        { data: validFallback.data },
+        { status: 200 } // Success because fallback is still usable
+      );
+    } catch (fallbackError: any) {
+      logger.error("Fallback also failed. Returning minimal safe roadmap.", {
+        error: sanitizeError(fallbackError),
+      });
+
+      // Last resort: minimal safe roadmap so the UI never fully breaks
+      const now = new Date().toISOString();
+      const minimalRoadmap: NormalizedRoadmap = {
+        version: "v2",
+        role: requestRoleTitle,
+        roleId: requestRoleId,
+        roleTitle: requestRoleTitle,
+        isFallback: true,
+        isMigrated: false,
+        roadmapVersion: 1,
+        topics: [],
+        progress: { completedTaskIds: [], skippedTaskIds: [] },
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      return NextResponse.json(
+        { data: minimalRoadmap },
+        { status: 200 }
+      );
     }
-
-    return NextResponse.json(
-      { data: validFallback.data },
-      { status: 200 } // Success because fallback is still usable
-    );
   }
 }
+
+// ============================================
+// PATCH /api/roadmap
+// ============================================
+// Action-based task state transitions.
+//
+// Body: { roleId, taskId, action }
+// action: "complete" | "uncomplete" | "skip" | "unskip"
+//
+// Returns:
+//   200 — success + updated roadmap
+//   409 — invalid transition (state machine rejection)
+//   422 — invalid task (not found)
+//   400 — invalid body
+//
+// Flow:
+//   1. Auth (server-side session)
+//   2. Zod validation (body)
+//   3. executeTaskAction() (services/db.ts)
+//      └→ validateTransition() (shared-logic.ts) — authoritative
+//      └→ Atomic MongoDB update ($addToSet/$pull)
+//      └→ Return fresh document
+// ============================================
 
 export async function PATCH(req: Request) {
   const trace = createApiTracer("PATCH /api/roadmap");
@@ -211,8 +271,8 @@ export async function PATCH(req: Request) {
 
     const body = await req.json();
 
-    // Validate with Zod schema (userId removed from schema)
-    const parseResult = patchRoadmapRequestSchema.safeParse(body);
+    // Validate with Zod schema
+    const parseResult = patchTaskRequestSchema.safeParse(body);
     if (!parseResult.success) {
       trace.fail(400, "Invalid PATCH body", { error: JSON.stringify(parseResult.error.flatten()) });
       return NextResponse.json(
@@ -221,32 +281,29 @@ export async function PATCH(req: Request) {
       );
     }
 
-    const { roleId, topicId, completed } = parseResult.data;
-    trace.step("validated", { roleId, topicId, action: completed ? "complete" : "uncomplete" });
+    const { roleId, taskId, action } = parseResult.data;
+    trace.step("validated", { roleId, taskId, action });
 
-    // Secure database update — scoped tightly by userId
-    const updated = await updateTopicCompletion(userId, roleId, topicId, completed);
+    // Delegate to service — ALL logic lives there + in shared-logic
+    const result = await executeTaskAction(userId, roleId, taskId, action);
 
-    if (!updated) {
-      trace.fail(404, "Topic not found or unauthorized", { roleId, topicId });
+    if (!result.ok) {
+      trace.fail(result.statusCode, result.error ?? "Unknown error", { roleId, taskId, action });
       return NextResponse.json(
-        { error: `Topic '${topicId}' not found for this user and role.` },
-        { status: 404 }
+        { error: result.error, meta: result.meta },
+        { status: result.statusCode }
       );
     }
 
-    trace.success({ roleId, topicId });
-
-    // #5: Guarded analytics — never breaks core flow
-    if (completed) {
-      logger.analytics("TOPIC_COMPLETED", { userId, roleId, topicId, requestId: trace.requestId });
-    }
-
-    return NextResponse.json({ success: true, data: updated }, { status: 200 });
+    trace.success({ roleId, taskId, action });
+    return NextResponse.json(
+      { success: true, data: result.roadmap, meta: result.meta },
+      { status: 200 }
+    );
   } catch (error: any) {
     trace.fail(500, sanitizeError(error));
     return NextResponse.json(
-      { error: "Failed to update topic completion." },
+      { error: "Failed to process task action." },
       { status: 500 }
     );
   }

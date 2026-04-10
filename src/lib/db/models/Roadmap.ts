@@ -1,80 +1,188 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
 // ============================================
-// ROADMAP MODEL
+// ROADMAP MODEL (v2)
 // ============================================
 // Source of truth for user roadmaps.
-// Compound index on { userId, roleId } ensures one roadmap per user+role.
-// Topics are embedded (not referenced) for single-query reads.
-// Future: paginate or chunk if topics grow large.
+// Hierarchy: Topic → Subtopic → Task (embedded)
+// Progress: flat arrays { completedTaskIds, skippedTaskIds }
+//
+// ⚠️ RULES:
+//   - NO computed fields (state, unlocked, percentage)
+//   - NO business logic — that's shared-logic.ts
+//   - Schema = STORAGE ONLY
 // ============================================
 
-/** Embedded topic subdocument interface */
-export interface IRoadmapTopic {
-  id: string; // UUID generated at normalization time
+// --- Subdocument: Task ---
+export interface ITask {
+  id: string;
+  subtopicId: string;
   title: string;
-  description: string;
-  difficulty: "Beginner" | "Intermediate" | "Advanced";
+  type: "learn" | "practice" | "project";
   estimatedTime: string;
-  completed: boolean;
+  isOptional: boolean;
+  isSkippable: boolean;
+  priorityScore: number;
+  order: number;
+  dependencies: {
+    type: "hard" | "soft";
+    taskId?: string;
+    groupId?: string;
+  }[];
+  groupId?: string;
+  generatedBy: "ai" | "system" | "user";
+  // Future-ready (optional)
+  scheduledDate?: string;
+  actualTimeMinutes?: number;
+  deadline?: string;
+  progressPercentage?: number;
 }
 
-/** Root roadmap document interface */
+// --- Subdocument: Subtopic ---
+export interface ISubtopic {
+  id: string;
+  topicId: string;
+  title: string;
+  type: "core" | "optional" | "alternative";
+  groupId?: string;
+  tasks: ITask[];
+  order: number;
+}
+
+// --- Subdocument: Topic ---
+export interface ITopic {
+  id: string;
+  title: string;
+  description: string;
+  order: number;
+  isOptional: boolean;
+  difficulty: "Beginner" | "Intermediate" | "Advanced";
+  estimatedTime: string;
+  subtopics: ISubtopic[];
+}
+
+// --- Subdocument: Progress ---
+export interface IProgress {
+  completedTaskIds: string[];
+  skippedTaskIds: string[];
+  // Future-ready
+  taskSchedule?: Record<string, string>;
+  taskActualTime?: Record<string, number>;
+  velocity?: number;
+  estimatedCompletionDate?: string;
+}
+
+// --- Root Document ---
 export interface IRoadmap extends Document {
   _id: mongoose.Types.ObjectId;
   userId: string;
   roleId: string;
-  roleTitle: string; // Refinement #2: standardized naming (was "role")
-  version: string;
+  roleTitle: string;
+  version: "v1" | "v2";
   isFallback: boolean;
-  topics: IRoadmapTopic[];
+  isMigrated: boolean;
+  roadmapVersion: number;
+  topics: ITopic[];
+  progress: IProgress;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const RoadmapTopicSchema = new Schema<IRoadmapTopic>(
+// ============================================
+// SCHEMAS (embedded, _id: false)
+// ============================================
+
+const TaskDependencySchema = new Schema(
+  {
+    type: { type: String, required: true, enum: ["hard", "soft"] },
+    taskId: { type: String, required: false },
+    groupId: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const TaskSchema = new Schema<ITask>(
+  {
+    id: { type: String, required: true },
+    subtopicId: { type: String, required: true },
+    title: { type: String, required: true },
+    type: { type: String, required: true, enum: ["learn", "practice", "project"] },
+    estimatedTime: { type: String, required: true },
+    isOptional: { type: Boolean, default: false },
+    isSkippable: { type: Boolean, default: true },
+    priorityScore: { type: Number, default: 50, min: 0, max: 100 },
+    order: { type: Number, required: true },
+    dependencies: { type: [TaskDependencySchema], default: [] },
+    groupId: { type: String, required: false },
+    generatedBy: { type: String, default: "ai", enum: ["ai", "system", "user"] },
+    // Future-ready
+    scheduledDate: { type: String, required: false },
+    actualTimeMinutes: { type: Number, required: false },
+    deadline: { type: String, required: false },
+    progressPercentage: { type: Number, required: false },
+  },
+  { _id: false }
+);
+
+const SubtopicSchema = new Schema<ISubtopic>(
+  {
+    id: { type: String, required: true },
+    topicId: { type: String, required: true },
+    title: { type: String, required: true },
+    type: { type: String, default: "core", enum: ["core", "optional", "alternative"] },
+    groupId: { type: String, required: false },
+    tasks: { type: [TaskSchema], default: [] },
+    order: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
+const TopicSchema = new Schema<ITopic>(
   {
     id: { type: String, required: true },
     title: { type: String, required: true },
     description: { type: String, required: true },
+    order: { type: Number, required: true },
+    isOptional: { type: Boolean, default: false },
     difficulty: {
       type: String,
       required: true,
       enum: ["Beginner", "Intermediate", "Advanced"],
     },
     estimatedTime: { type: String, required: true },
-    completed: { type: Boolean, default: false },
+    subtopics: { type: [SubtopicSchema], default: [] },
   },
-  { _id: false } // No separate _id for subdocuments
+  { _id: false }
 );
+
+const ProgressSchema = new Schema<IProgress>(
+  {
+    completedTaskIds: { type: [String], default: [] },
+    skippedTaskIds: { type: [String], default: [] },
+    // Future-ready
+    taskSchedule: { type: Map, of: String, required: false },
+    taskActualTime: { type: Map, of: Number, required: false },
+    velocity: { type: Number, required: false },
+    estimatedCompletionDate: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+// ============================================
+// ROOT SCHEMA
+// ============================================
 
 const RoadmapSchema = new Schema<IRoadmap>(
   {
-    userId: {
-      type: String,
-      required: true,
-      index: true,
-    },
-    roleId: {
-      type: String,
-      required: true,
-    },
-    roleTitle: {
-      type: String,
-      required: true,
-    },
-    version: {
-      type: String,
-      default: "v1",
-    },
-    isFallback: {
-      type: Boolean,
-      default: false,
-    },
-    topics: {
-      type: [RoadmapTopicSchema],
-      default: [],
-    },
+    userId: { type: String, required: true, index: true },
+    roleId: { type: String, required: true },
+    roleTitle: { type: String, required: true },
+    version: { type: String, default: "v2", enum: ["v1", "v2"] },
+    isFallback: { type: Boolean, default: false },
+    isMigrated: { type: Boolean, default: false },
+    roadmapVersion: { type: Number, default: 1 },
+    topics: { type: [TopicSchema], default: [] },
+    progress: { type: ProgressSchema, default: { completedTaskIds: [], skippedTaskIds: [] } },
   },
   {
     timestamps: true, // Auto-manages createdAt + updatedAt

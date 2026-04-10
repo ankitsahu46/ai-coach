@@ -1,44 +1,106 @@
-import type { RoadmapResponseOutput, NormalizedTopic, NormalizedRoadmap, Difficulty } from "../types";
+import type { RoadmapResponseInput, NormalizedRoadmap, Difficulty, Topic, Subtopic, Task } from "../types";
 
 // ============================================
-// ROADMAP NORMALIZATION UTILITY
-// Transforms AI structured payload into client-schema with DB requirements
-// Refinement #2: standardized roleTitle field alongside backward-compat 'role'
+// ROADMAP NORMALIZATION UTILITY (v2)
+// ============================================
+// Transforms AI structured payload → NormalizedRoadmap (client+DB shape).
+// Assigns stable UUIDs, enforces difficulty validation, and builds
+// the full Topic → Subtopic → Task hierarchy with proper cross-refs.
 // ============================================
 
 const VALID_DIFFICULTIES: Difficulty[] = ["Beginner", "Intermediate", "Advanced"];
 
 export function normalizeRoadmapPayload(
-  rawPayload: RoadmapResponseOutput,
+  rawPayload: RoadmapResponseInput,
   roleId: string,
-  user?: any, // Future-proofing for full User object injection
+  user?: { id?: string } | null,
   isFallback: boolean = false
 ): NormalizedRoadmap {
-  const normalizedTopics: NormalizedTopic[] = rawPayload.topics.map((topic) => {
-    // 7. Strict Data Normalization: Avoid Regex, use valid array checks
-    const safeDifficulty = VALID_DIFFICULTIES.includes(topic.difficulty as Difficulty)
-      ? (topic.difficulty as Difficulty)
+  const now = new Date().toISOString();
+
+  const topics: Topic[] = rawPayload.topics.map((rawTopic, topicIdx) => {
+    const topicId = crypto.randomUUID();
+
+    const safeDifficulty = VALID_DIFFICULTIES.includes(rawTopic.difficulty as Difficulty)
+      ? (rawTopic.difficulty as Difficulty)
       : "Beginner";
 
+    const subtopics: Subtopic[] = (rawTopic.subtopics ?? []).map((rawSub, subIdx) => {
+      const subtopicId = crypto.randomUUID();
+
+      const tasks: Task[] = (rawSub.tasks ?? []).map((rawTask, taskIdx) => {
+        const taskId = crypto.randomUUID();
+        return {
+          id: taskId,
+          subtopicId,
+          title: rawTask.title,
+          type: rawTask.type ?? "learn",
+          estimatedTime: rawTask.estimatedTime ?? "1 hour",
+          isOptional: rawTask.isOptional ?? false,
+          isSkippable: rawTask.isSkippable ?? true,
+          priorityScore: rawTask.priorityScore ?? 50,
+          order: taskIdx,
+          dependencies: (rawTask.dependencyRefs ?? []).map((ref) => ({
+            type: rawTask.dependencyType ?? "soft",
+            taskId: ref,
+          })),
+          groupId: rawTask.groupId,
+          generatedBy: "ai" as const,
+        };
+      });
+
+      return {
+        id: subtopicId,
+        topicId,
+        title: rawSub.title,
+        type: rawSub.type ?? "core",
+        groupId: rawSub.groupId,
+        tasks,
+        order: subIdx,
+      };
+    });
+
+    // If no subtopics from AI, wrap all as a single "Core Concepts" subtopic
+    // This handles backward-compatible AI prompts
+    if (subtopics.length === 0) {
+      const subtopicId = crypto.randomUUID();
+      subtopics.push({
+        id: subtopicId,
+        topicId,
+        title: "Core Concepts",
+        type: "core",
+        tasks: [],
+        order: 0,
+      });
+    }
+
     return {
-      ...topic,
+      id: topicId,
+      title: rawTopic.title,
+      description: rawTopic.description,
+      order: topicIdx,
+      isOptional: rawTopic.isOptional ?? false,
       difficulty: safeDifficulty,
-      id: (topic as any).id || crypto.randomUUID(), // H-06: preserve existing IDs (migration safety)
-      completed: (topic as any).completed ?? false, // Preserve existing completion state
+      estimatedTime: rawTopic.estimatedTime,
+      subtopics,
     };
   });
 
-  const now = new Date().toISOString();
-
   return {
-    version: "v1", // Explicitly bind API contract version to all successful normalizer sweeps
-    role: rawPayload.role, // Backward compat: human-readable title
-    roleTitle: rawPayload.role, // Refinement #2: standardized display name
+    version: "v2",
+    role: rawPayload.role,
+    roleTitle: rawPayload.role,
     roleId,
-    userId: user?.id, // Structure reserved for full DB hydration mapping
+    userId: user?.id,
     isFallback,
+    isMigrated: false,
+    roadmapVersion: 1,
+    topics,
+    progress: {
+      completedTaskIds: [],
+      skippedTaskIds: [],
+    },
     createdAt: now,
     updatedAt: now,
-    topics: normalizedTopics,
   };
 }
