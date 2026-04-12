@@ -953,32 +953,54 @@ export function getTopicProgress(
 // 11. NEXT BEST TASK ALGORITHM
 // ============================================
 
-/** Compute composite score for task ranking. */
+/**
+ * Compute composite score for task ranking.
+ *
+ * Scoring philosophy for a LEARNING ROADMAP:
+ *   The roadmap's hierarchical order is the PEDAGOGY.
+ *   Completing a nearly-done subtopic is always better than starting a new one.
+ *   Within the same priority tier, earlier tasks in the roadmap win.
+ *
+ * Dimensions (ordered by dominance):
+ *   1. Subtopic completion proximity (0-100): finish what you started
+ *   2. Roadmap sequential order      (0-100): author's intended sequence
+ *   3. Critical path                 (0-100): unblock downstream tasks
+ *   4. Priority score                (0-100): AI-assigned importance
+ *   5. Type bonus                    (0-100): learn → practice → project
+ */
 export function computeCompositeScore(
   task: Task,
   allTasks: Task[],
   _progress: UserProgress,
-  graphCache: DependencyGraphCache
+  graphCache: DependencyGraphCache,
+  subtopicCompletionPct?: number
 ): number {
   const totalTasks = allTasks.length;
   if (totalTasks === 0) return 0;
 
-  const criticalPathBonus =
-    (graphCache.getTransitiveDependentCount(task.id) / totalTasks) * 100;
+  // ── 1. Subtopic completion proximity ──
+  // If the subtopic is partially complete, strongly prefer finishing it.
+  // 75% done → 75 points. 0% (new subtopic) → 0 points.
+  const subtopicProximity = subtopicCompletionPct ?? 0;
 
-  // Global position: earlier = higher score
+  // ── 2. Sequential order (earlier in roadmap = higher) ──
   const globalIndex = allTasks.findIndex((t) => t.id === task.id);
   const orderScore = globalIndex === -1 ? 50 : 100 - (globalIndex / totalTasks) * 100;
 
-  // Type bonus: learn first, then practice, then project
+  // ── 3. Critical path (how many tasks this unblocks) ──
+  const criticalPathBonus =
+    (graphCache.getTransitiveDependentCount(task.id) / totalTasks) * 100;
+
+  // ── 4. Type bonus (learn → practice → project for tiebreaking) ──
   const typeBonusMap: Record<string, number> = { learn: 100, practice: 60, project: 30 };
   const typeBonus = typeBonusMap[task.type] ?? 50;
 
   return (
-    task.priorityScore * 0.4 +
-    criticalPathBonus * 0.3 +
-    orderScore * 0.2 +
-    typeBonus * 0.1
+    subtopicProximity * 0.35 +
+    orderScore * 0.30 +
+    criticalPathBonus * 0.15 +
+    task.priorityScore * 0.10 +
+    typeBonus * 0.10
   );
 }
 
@@ -994,6 +1016,7 @@ export function getNextRecommendedTask(
   if (allTasks.length === 0) return null;
 
   const ctx = buildContext(allTasks, progress, graphCache);
+  const completedSet = ctx.completedSet;
 
   let available = allTasks.filter(
     (t) => getTaskStateCtx(t, ctx) === "available"
@@ -1005,10 +1028,32 @@ export function getNextRecommendedTask(
   const nonOptional = available.filter((t) => !t.isOptional);
   if (nonOptional.length > 0) available = nonOptional;
 
-  // Score and sort
+  // Pre-compute subtopic completion % for each available task
+  const taskSubtopicPct = new Map<string, number>();
+  for (const topic of roadmap.topics) {
+    for (const sub of topic.subtopics) {
+      const subTotal = sub.tasks.length;
+      if (subTotal === 0) continue;
+      let subCompleted = 0;
+      for (const t of sub.tasks) {
+        if (completedSet.has(t.id)) subCompleted++;
+      }
+      const pct = Math.round((subCompleted / subTotal) * 100);
+      for (const t of sub.tasks) {
+        if (available.some(a => a.id === t.id)) {
+          taskSubtopicPct.set(t.id, pct);
+        }
+      }
+    }
+  }
+
+  // Score with subtopic completion context
   const scored = available.map((task) => ({
     task,
-    score: computeCompositeScore(task, allTasks, progress, graphCache),
+    score: computeCompositeScore(
+      task, allTasks, progress, graphCache,
+      taskSubtopicPct.get(task.id) ?? 0
+    ),
   }));
 
   scored.sort((a, b) => b.score - a.score);
@@ -1034,6 +1079,7 @@ export function getNextRecommendedTaskWithMeta(
   }
 
   const ctx = buildContext(allTasks, progress, graphCache);
+  const completedSet = ctx.completedSet;
 
   let available = allTasks.filter(
     (t) => getTaskStateCtx(t, ctx) === "available"
@@ -1047,9 +1093,31 @@ export function getNextRecommendedTaskWithMeta(
   const usedOptionalFallback = nonOptional.length === 0;
   if (nonOptional.length > 0) available = nonOptional;
 
+  // Pre-compute subtopic completion % (same logic as getNextRecommendedTask)
+  const taskSubtopicPct = new Map<string, number>();
+  for (const topic of roadmap.topics) {
+    for (const sub of topic.subtopics) {
+      const subTotal = sub.tasks.length;
+      if (subTotal === 0) continue;
+      let subCompleted = 0;
+      for (const t of sub.tasks) {
+        if (completedSet.has(t.id)) subCompleted++;
+      }
+      const pct = Math.round((subCompleted / subTotal) * 100);
+      for (const t of sub.tasks) {
+        if (available.some(a => a.id === t.id)) {
+          taskSubtopicPct.set(t.id, pct);
+        }
+      }
+    }
+  }
+
   const scored = available.map((task) => ({
     task,
-    score: computeCompositeScore(task, allTasks, progress, graphCache),
+    score: computeCompositeScore(
+      task, allTasks, progress, graphCache,
+      taskSubtopicPct.get(task.id) ?? 0
+    ),
     fanOut: graphCache.getTransitiveDependentCount(task.id),
   }));
 

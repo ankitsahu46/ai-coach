@@ -40,7 +40,7 @@ export function TaskDetailPanel({ task, onAction, isLoading = false }: {
   }, [handleClose]);
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label={`Task details: ${task.title}`}>
+    <div className="fixed inset-0 z-[60] flex justify-end" role="dialog" aria-modal="true" aria-label={`Task details: ${task.title}`}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm slide-over-backdrop" onClick={handleClose} />
 
       <aside className={`relative w-full max-w-md bg-[#111114] border-l border-[var(--color-border-medium)] shadow-2xl flex flex-col slide-over-panel ${closing ? "closing" : ""}`}>

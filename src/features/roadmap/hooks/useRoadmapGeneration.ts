@@ -538,12 +538,14 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
         case "unskip":
           return await handleTaskAction(action.taskId, action.type as TaskAction);
         case "open":
+          setFocusTaskId(null);
           setSelectedTaskId(action.taskId);
           return { success: true };
         case "close-panel":
           setSelectedTaskId(null);
           return { success: true };
         case "focus":
+          setSelectedTaskId(null);
           setFocusTaskId(action.taskId);
           return { success: true };
         case "exit-focus":
