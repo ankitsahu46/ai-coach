@@ -117,7 +117,7 @@ Rules:
 
   return generateWithRetry(async () => {
     const aiCall = ai.models.generateContent({
-      model: "gemini-1.5-flash", // Standard stable fast model (free tier available)
+      model: "gemini-2.5-flash-lite",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
