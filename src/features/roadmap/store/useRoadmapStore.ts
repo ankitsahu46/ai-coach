@@ -75,6 +75,12 @@ interface RoadmapState {
   setDelayedUX: (v: boolean) => void;
   setError: (v: string | null) => void;
 
+  /** UI Layout States */
+  selectedTaskId: string | null;
+  focusTaskId: string | null;
+  setSelectedTaskId: (id: string | null) => void;
+  setFocusTaskId: (id: string | null) => void;
+
   /**
    * Optimistic update: mutate progress arrays based on action.
    * Minimal reference change — only creates new array if state actually changes.
@@ -96,6 +102,8 @@ export const useRoadmapStore = create<RoadmapState>((set, get) => ({
   isLoading: false,
   isDelayedUX: false,
   error: null,
+  selectedTaskId: null,
+  focusTaskId: null,
 
   // ── Setters ──
   setRoadmapData: (data) => set({ roadmapData: data }),
@@ -103,6 +111,8 @@ export const useRoadmapStore = create<RoadmapState>((set, get) => ({
   setLoading: (v) => set({ isLoading: v }),
   setDelayedUX: (v) => set({ isDelayedUX: v }),
   setError: (v) => set({ error: v }),
+  setSelectedTaskId: (id) => set({ selectedTaskId: id }),
+  setFocusTaskId: (id) => set({ focusTaskId: id }),
 
   // ── Optimistic Update ──
   performOptimisticUpdate: (taskId, action) => {

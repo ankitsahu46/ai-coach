@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { AppProviders } from "@/providers/AppProviders";
 import "./globals.css";
+import "@/features/roadmap/components/roadmap-ui/index.css";
 
 const inter = Inter({
   variable: "--font-inter",

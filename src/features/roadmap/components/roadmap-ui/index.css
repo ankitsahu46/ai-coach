@@ -1,0 +1,296 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-primary: #3b82f6;
+  --color-brand-secondary: #10b981;
+  --color-bg-main: #09090b;
+  --color-bg-card: #131316;
+  --color-bg-card-hover: #1a1a1f;
+  --color-bg-surface: #18181b;
+  --color-border-subtle: #23232a;
+  --color-border-medium: #2e2e38;
+  --color-text-dim: #71717a;
+  --color-text-muted: #a1a1aa;
+  --color-task-learn: #3b82f6;
+  --color-task-practice: #f59e0b;
+  --color-task-project: #8b5cf6;
+  --color-state-completed: #22c55e;
+  --color-state-locked: #52525b;
+  --color-state-skipped: #6b7280;
+  --color-glow-recommended: rgba(59, 130, 246, 0.25);
+}
+
+@layer base {
+  body {
+    @apply bg-[var(--color-bg-main)] text-zinc-100 antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  * {
+    @apply border-[var(--color-border-subtle)];
+  }
+}
+
+/*
+ * ──────────────────────────────────────────────────────────
+ *  4.5 — CSS ISOLATION
+ *
+ *  ALL custom styles are scoped under .roadmap-ui
+ *  This prevents style collisions when integrated into
+ *  the main project's layout.
+ * ──────────────────────────────────────────────────────────
+ */
+
+/* ── Dot grid background ── */
+.roadmap-ui.roadmap-grid {
+  background-image: radial-gradient(circle at 1px 1px, #1e1e24 1px, transparent 0);
+  background-size: 32px 32px;
+}
+
+/* ── Recommended task — subtle pulsing glow ── */
+@keyframes recommendedPulse {
+  0%, 100% { box-shadow: 0 0 6px 0 rgba(59, 130, 246, 0.15), inset 0 0 0 1px rgba(59, 130, 246, 0.25); }
+  50% { box-shadow: 0 0 16px 2px rgba(59, 130, 246, 0.25), inset 0 0 0 1px rgba(59, 130, 246, 0.4); }
+}
+.roadmap-ui .task-recommended {
+  animation: recommendedPulse 3s ease-in-out infinite;
+}
+
+/* ── Start Here arrow bounce ── */
+@keyframes bounceRight {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(3px); }
+}
+.roadmap-ui .start-here-arrow {
+  animation: bounceRight 1.4s ease-in-out infinite;
+}
+
+/* ── Progress bar fill ── */
+@keyframes progressFill {
+  from { width: 0%; }
+}
+.roadmap-ui .progress-bar-animated {
+  animation: progressFill 0.8s ease-out forwards;
+}
+
+/* ── Accordion ── */
+.roadmap-ui .accordion-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.roadmap-ui .accordion-content.open {
+  grid-template-rows: 1fr;
+}
+.roadmap-ui .accordion-inner {
+  overflow: hidden;
+}
+
+/* ── Subtopic accordion ── */
+.roadmap-ui .subtopic-content {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.roadmap-ui .subtopic-content.open {
+  grid-template-rows: 1fr;
+}
+.roadmap-ui .subtopic-inner {
+  overflow: hidden;
+}
+
+/* ── Checkmark draw ── */
+@keyframes checkDraw {
+  to { stroke-dashoffset: 0; }
+}
+.roadmap-ui .check-animated {
+  stroke-dasharray: 20;
+  stroke-dashoffset: 20;
+  animation: checkDraw 0.4s ease-out 0.1s forwards;
+}
+
+/* ── Badge shimmer ── */
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+.roadmap-ui .badge-shimmer {
+  background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 25%, #93c5fd 50%, #60a5fa 75%, #3b82f6 100%);
+  background-size: 200% auto;
+  animation: shimmer 3s linear infinite;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Topic card state emphasis ── */
+.roadmap-ui .topic-card-completed {
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.12);
+}
+.roadmap-ui .topic-card-active {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
+}
+.roadmap-ui .topic-card-locked {
+  opacity: 0.55;
+}
+.roadmap-ui .topic-card-locked:hover {
+  opacity: 0.7;
+}
+
+/* ── Slide-over panel ── */
+.roadmap-ui .slide-over-backdrop {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.roadmap-ui .slide-over-panel {
+  animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.roadmap-ui .slide-over-panel.closing {
+  animation: slideOut 0.25s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+@keyframes slideOut {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+/* ── Focus mode ── */
+@keyframes focusFadeIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+.roadmap-ui .focus-mode-enter {
+  animation: focusFadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* ── Confetti ── */
+@keyframes confettiFall {
+  0% { transform: translateY(-10px) rotate(0deg) scale(1); opacity: 1; }
+  100% { transform: translateY(120px) rotate(720deg) scale(0.3); opacity: 0; }
+}
+.roadmap-ui .confetti-piece {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  animation: confettiFall var(--duration, 1.2s) cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  animation-delay: var(--delay, 0s);
+}
+
+/* ── Toast notification ── */
+@keyframes toastSlideUp {
+  0% { transform: translateX(-50%) translateY(20px); opacity: 0; }
+  15% { transform: translateX(-50%) translateY(0); opacity: 1; }
+  85% { transform: translateX(-50%) translateY(0); opacity: 1; }
+  100% { transform: translateX(-50%) translateY(-10px); opacity: 0; }
+}
+.roadmap-ui .toast-notification {
+  animation: toastSlideUp 2.5s ease-out forwards;
+}
+
+/* ── Streak flame flicker ── */
+@keyframes flameFlicker {
+  0%, 100% { transform: scaleY(1) scaleX(1); }
+  25% { transform: scaleY(1.06) scaleX(0.96); }
+  50% { transform: scaleY(0.95) scaleX(1.04); }
+  75% { transform: scaleY(1.03) scaleX(0.98); }
+}
+.roadmap-ui .flame-flicker {
+  animation: flameFlicker 1.5s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+/* ── Dependency hint: hidden by default, visible on hover ── */
+.roadmap-ui .dep-hint {
+  max-height: 0;
+  opacity: 0;
+  transition: max-height 0.25s ease, opacity 0.2s ease, margin-top 0.25s ease;
+  overflow: hidden;
+  margin-top: 0;
+}
+.roadmap-ui .task-row-hover:hover .dep-hint,
+.roadmap-ui .dep-hint.always-show {
+  max-height: 40px;
+  opacity: 1;
+  margin-top: 4px;
+}
+
+/* ── Custom scrollbar (scoped to roadmap panels) ── */
+.roadmap-ui ::-webkit-scrollbar {
+  width: 6px;
+}
+.roadmap-ui ::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+.roadmap-ui ::-webkit-scrollbar-thumb {
+  @apply bg-zinc-700/50 rounded-full hover:bg-zinc-600 transition-colors;
+}
+
+/* ── Journey connector line ── */
+.roadmap-ui .journey-connector::before {
+  content: '';
+  position: absolute;
+  left: 20px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--color-border-medium) 0px,
+    var(--color-border-medium) 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+/* ── Momentum banner slide-in ── */
+@keyframes momentumSlideIn {
+  0% { transform: translateY(-8px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.roadmap-ui .momentum-banner {
+  animation: momentumSlideIn 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* ── Focus mode timer pulse ── */
+@keyframes timerPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.roadmap-ui .timer-pulse {
+  animation: timerPulse 2s ease-in-out infinite;
+}
+
+/* ── Skill unlock pop ── */
+@keyframes skillUnlockPop {
+  0% { transform: scale(0.7) translateY(10px); opacity: 0; }
+  50% { transform: scale(1.05) translateY(-2px); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.roadmap-ui .skill-unlock-pop {
+  animation: skillUnlockPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* ── Focus mode keyboard hint ── */
+@keyframes hintFadeIn {
+  from { opacity: 0; }
+  to { opacity: 0.5; }
+}
+.roadmap-ui .keyboard-hint {
+  animation: hintFadeIn 1s ease-out 1.5s forwards;
+  opacity: 0;
+}
+
+/* ── Narrative text gradient ── */
+.roadmap-ui .narrative-gradient {
+  background: linear-gradient(90deg, #60a5fa, #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

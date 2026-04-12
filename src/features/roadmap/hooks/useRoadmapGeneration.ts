@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef, useState } from "react";
+import { useEffect, useCallback, useRef, useState, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import type { Role } from "@/types";
@@ -9,7 +9,7 @@ import {
   getCachedRoadmap,
   setCachedRoadmap,
 } from "../store/useRoadmapStore";
-import { useRoadmapStats, useGraphCache, useNextTask, useAllTaskStates } from "../store/roadmapSelectors";
+import { useRoadmapStats, useRoadmapDerivedState, useTopicViews } from "../store/roadmapSelectors";
 import {
   validateTransition,
   getAllTasks,
@@ -64,12 +64,15 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
   const setError = useRoadmapStore((s) => s.setError);
   const performOptimisticUpdate = useRoadmapStore((s) => s.performOptimisticUpdate);
   const rollbackProgress = useRoadmapStore((s) => s.rollbackProgress);
+  const selectedTaskId = useRoadmapStore((s) => s.selectedTaskId);
+  const focusTaskId = useRoadmapStore((s) => s.focusTaskId);
+  const setSelectedTaskId = useRoadmapStore((s) => s.setSelectedTaskId);
+  const setFocusTaskId = useRoadmapStore((s) => s.setFocusTaskId);
 
   // ── Selectors (derived state via shared-logic) ──
+  const derivedState = useRoadmapDerivedState(roadmapData);
+  const topics = useTopicViews(roadmapData, derivedState);
   const stats = useRoadmapStats(roadmapData);
-  const graphCache = useGraphCache(roadmapData);
-  const nextTask = useNextTask(roadmapData, graphCache);
-  const taskStates = useAllTaskStates(roadmapData);
 
   // Abort + idempotency refs
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -314,9 +317,9 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
   const pendingConsistencyCountRef = useRef(0);
 
   const handleTaskAction = useCallback(
-    async (taskId: string, action: TaskAction) => {
+    async (taskId: string, action: TaskAction): Promise<{ success: boolean; error?: string; code?: string }> => {
       const currentRoadmap = useRoadmapStore.getState().roadmapData;
-      if (!currentRoadmap) return;
+      if (!currentRoadmap) return { success: false, error: "Roadmap not loaded" };
 
       // 1. Pre-flight validation via shared-logic
       const allTasks = getAllTasks(currentRoadmap);
@@ -324,21 +327,21 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
       const task = getTaskOrNull(taskMap, taskId);
       if (!task) {
         logger.warn("Task not found for action", { taskId, action });
-        return;
+        return { success: false, error: "Task not found" };
       }
 
       const transition = validateTransition(task, action, allTasks, currentRoadmap.progress);
       if (!transition.ok) {
         logger.warn("Transition rejected", { taskId, action, reason: transition.reason });
         toast.warning("Action not allowed", { id: "transition-blocked", description: transition.reason });
-        return;
+        return { success: false, error: transition.reason, code: "INVALID_TRANSITION" };
       }
 
       // 2. Dedup: check in-flight AND verify current state matches expected
       const currentState = getTaskState(task, allTasks, currentRoadmap.progress);
       if (inFlightTasksRef.current.has(taskId)) {
         logger.warn("Task action already in-flight — blocking duplicate", { taskId });
-        return;
+        return { success: false, error: "Action already in flight" };
       }
 
       // 3. Snapshot progress for rollback
@@ -410,7 +413,7 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
             }
           );
         }
-        return;
+        return { success: true };
       }
 
       // 9. Fire PATCH to server
@@ -493,6 +496,7 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
             }, 2000);
           }
         }
+        return { success: true };
       } catch (err: any) {
         // 11. Rollback to exact pre-action snapshot
         logger.error("API update failed — rolling back", err);
@@ -516,6 +520,7 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
             }
           }
         }
+        return { success: false, error: err.message, code: "NETWORK_ERROR" };
       } finally {
         // 12. Always cleanup in-flight tracking
         removeInFlight(taskId);
@@ -524,17 +529,106 @@ export function useRoadmapGeneration(selectedRole: Role | null) {
     [performOptimisticUpdate, rollbackProgress, setRoadmapData, addInFlight, removeInFlight]
   );
 
+  const onAction = useCallback(
+    async (action: any): Promise<{ success: boolean; error?: string; code?: string }> => {
+      switch (action.type) {
+        case "complete":
+        case "skip":
+        case "uncomplete":
+        case "unskip":
+          return await handleTaskAction(action.taskId, action.type as TaskAction);
+        case "open":
+          setSelectedTaskId(action.taskId);
+          return { success: true };
+        case "close-panel":
+          setSelectedTaskId(null);
+          return { success: true };
+        case "focus":
+          setFocusTaskId(action.taskId);
+          return { success: true };
+        case "exit-focus":
+          setFocusTaskId(null);
+          return { success: true };
+        case "focus-next":
+          if (derivedState.nextTaskId) setFocusTaskId(derivedState.nextTaskId);
+          return { success: true };
+        case "resume":
+          if (derivedState.nextTaskId) setSelectedTaskId(derivedState.nextTaskId);
+          return { success: true };
+        case "bookmark":
+        case "scroll-to-recommended":
+          return { success: true };
+        default:
+          return { success: false, error: "Unknown action" };
+      }
+    },
+    [handleTaskAction, setSelectedTaskId, setFocusTaskId, derivedState.nextTaskId]
+  );
+
+  const data = useMemo(() => {
+    let safeSelectedTask = null;
+    if (selectedTaskId) {
+      const taskObj = derivedState.allTasks.find(t => t.id === selectedTaskId);
+      if (taskObj) {
+        safeSelectedTask = {
+          ...taskObj,
+          state: derivedState.taskStatesMap.get(selectedTaskId) || "locked",
+          description: "", resources: [], skills: [], prerequisites: [], unlocks: [], isBookmarked: false, isRecommended: selectedTaskId === derivedState.nextTaskId
+        };
+      }
+    }
+
+    let safeFocusTask = null;
+    if (focusTaskId) {
+      const taskObj = derivedState.allTasks.find(t => t.id === focusTaskId);
+      if (taskObj) {
+        safeFocusTask = {
+          ...taskObj,
+          description: "", skills: [], unlocks: [], resources: [], nextTask: null, isRecommended: focusTaskId === derivedState.nextTaskId
+        };
+      }
+    }
+
+    return {
+      title: roadmapData?.roleTitle || roadmapData?.role || "Learning Roadmap",
+      topics,
+      progress: {
+        ...stats,
+        remainingHours: 0,
+      },
+      dailyPlan: null,
+      momentum: null,
+      weeklySummary: null,
+      streak: null,
+      lastTask: null,
+      selectedTask: safeSelectedTask,
+      focusTask: safeFocusTask,
+      recommendedTaskId: derivedState.nextTaskId,
+      isUpdatingTaskIds: inFlightTasks,
+      onAction,
+      showConfetti: false,
+      toast: null
+    };
+  }, [
+    roadmapData?.roleTitle,
+    roadmapData?.role,
+    topics, 
+    stats, 
+    derivedState.allTasks, 
+    derivedState.taskStatesMap, 
+    derivedState.nextTaskId, 
+    selectedTaskId, 
+    focusTaskId, 
+    inFlightTasks, 
+    onAction
+  ]);
+
   return {
-    roadmapData,
-    stats,
-    graphCache,
-    nextTask,
-    taskStates,
-    inFlightTasks,
+    data,
+    onAction,
     isLoading,
     isDelayedUX,
     error,
     retryGenerate: () => selectedRole && generateRoadmap(selectedRole),
-    handleTaskAction,
   };
 }

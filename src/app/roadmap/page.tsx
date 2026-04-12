@@ -1,10 +1,10 @@
 import { AppShell } from "@/components/layout/AppShell";
-import { RoadmapPage } from "@/features/roadmap/components/RoadmapPage";
+import { RoadmapContainer } from "@/features/roadmap/components/RoadmapContainer";
 
 export default function Roadmap() {
   return (
     <AppShell>
-      <RoadmapPage />
+      <RoadmapContainer />
     </AppShell>
   );
 }
