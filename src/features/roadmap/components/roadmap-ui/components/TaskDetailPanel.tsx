@@ -82,9 +82,16 @@ export function TaskDetailPanel({ task, onAction, isLoading = false }: {
               </button>
               <div className="flex gap-2">
                 <button onClick={() => onAction({ type: "skip", taskId: task.id })}
-                  disabled={isLoading}
-                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-zinc-800/40 text-zinc-400 text-xs font-medium border border-zinc-700/20 hover:bg-zinc-800 hover:text-zinc-300 transition-all cursor-pointer ${isLoading ? "opacity-50 pointer-events-none" : ""}`}
-                  aria-label="Skip task">
+                  disabled={isLoading || !task.isSkippable}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
+                    !task.isSkippable 
+                      ? "bg-zinc-900 border-zinc-800/50 text-zinc-600 opacity-40 cursor-not-allowed"
+                      : isLoading
+                        ? "bg-zinc-800/40 border-zinc-700/20 text-zinc-400 opacity-50 pointer-events-none"
+                        : "bg-zinc-800/40 border-zinc-700/20 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-300 cursor-pointer"
+                  }`}
+                  aria-label={!task.isSkippable ? "Core task cannot be skipped" : "Skip task"}
+                  title={!task.isSkippable ? "This core foundation task cannot be skipped." : undefined}>
                   <SkipIcon /> Skip
                 </button>
                 <button onClick={() => onAction({ type: "bookmark", taskId: task.id })}

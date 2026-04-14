@@ -3,7 +3,7 @@ import { roadmapResponseSchema, RoadmapResponseOutput } from "../types";
 import { logger } from "../utils/logger";
 import { injectAIFailureMock } from "../utils/testHelpers";
 
-const AI_TIMEOUT_MS = 15000;
+const AI_TIMEOUT_MS = 60000; // Increased massively for full DAG graph LLM generation
 
 /**
  * Helper to enforce a strict timeout
@@ -47,7 +47,7 @@ async function generateWithRetry(callAi: (attempt: number) => Promise<RoadmapRes
 
       // If it's the last attempt or a non-retryable error, throw it upward
       if (attempt === maxAttempts || !isSyntaxOrTimeout) {
-        logger.error(`AI execution failed permanently on attempt ${attempt}.`, error.message);
+        logger.error(`AI execution failed permanently on attempt ${attempt}.`, { error: error.message, stack: error.stack });
         throw error;
       }
       // Otherwise loop around and try again

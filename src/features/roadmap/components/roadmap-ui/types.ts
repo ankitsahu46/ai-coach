@@ -37,6 +37,7 @@ export interface TaskView {
   dependencyHint?: string;       // e.g. "Complete Async/Await to unlock"
   isLoading?: boolean;           // true while optimistic update is in flight
   order: number;                 // Stable sort position (set by selector)
+  isSkippable: boolean;
 }
 
 export interface TaskDetailView extends TaskView {
