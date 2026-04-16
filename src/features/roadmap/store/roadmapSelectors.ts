@@ -224,6 +224,7 @@ export function useTopicViews(
             estimatedTime: task.estimatedTime,
             isRecommended: task.id === nextTaskId,
             order: task.order,
+            isSkippable: task.isSkippable,
             // dependencyHint: let UI omit instead of fake placeholders
           };
         });
