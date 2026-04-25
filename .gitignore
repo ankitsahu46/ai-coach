@@ -20,9 +20,6 @@
 # production
 /build
 
-# not include even the folder
-/.gemini/
-
 
 # misc
 .DS_Store

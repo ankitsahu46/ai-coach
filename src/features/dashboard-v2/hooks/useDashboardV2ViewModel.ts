@@ -70,7 +70,7 @@ export function useDashboardV2ViewModel(): DashboardV2ViewModel {
           taskTitle: realNextTask.title,
           reasonText: "Because your React skill is currently low and this task has the highest impact on your progress.", // Real generative reasons later
           roleId: realRoleData.roleId,
-          roleTitle: realRoleData.roleTitle,
+          roleTitle: realRoleData.roleTitle ?? realRoleData.role,
           taskId: realNextTask.id,
         }
       : null,
